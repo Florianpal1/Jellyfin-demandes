@@ -51,7 +51,7 @@ public sealed class RequestServiceTests : IDisposable
         _service = new RequestService(
             _repository,
             _cache,
-            new ProwlarrClient(_http, _config),
+            new IndexerProvider(new ProwlarrClient(_http, _config), new TorznabClient(_http, _config), _config),
             new TorboxClient(_http, _config),
             _library,
             _notifications,

@@ -2,7 +2,7 @@
 
 Plugin Jellyfin **12.2** (usage privé) :
 
-- **Utilisateurs** : recherche d'un film ou d'une série (fiches TMDB via Jellyfin), choix d'un torrent C411 (via Prowlarr) avec taille, seeders et leechers. Les torrents **déjà en cache Torbox** sont affichés en premier (⚡), puis les plus seedés. Demande en un clic.
+- **Utilisateurs** : recherche d'un film ou d'une série (fiches TMDB via Jellyfin), choix d'un torrent C411 (API Torznab de C411 en direct, ou via Prowlarr) avec taille, seeders et leechers. Les torrents **déjà en cache Torbox** sont affichés en premier (⚡), puis les plus seedés. Demande en un clic.
 - **Administrateurs** : validation / refus des demandes. Validation **automatique** si le torrent est en cache Torbox, ou s'il est sous le seuil de taille (film / épisode / saison) avec assez de seeders.
 - **Torbox** : les demandes validées y sont ajoutées directement. La récupération des fichiers reste assurée par l'application « RealDebrid » existante.
 - Suivi : progression Torbox, passage en « Disponible » quand le média arrive dans Jellyfin, notifications (dans la page + webhook Discord optionnel).
@@ -48,7 +48,8 @@ Pour régénérer l'archive d'une release existante : onglet *Actions* → *Rele
 
 Tableau de bord → Extensions → **C411 Torbox** :
 
-1. **Prowlarr** : URL (vue depuis le serveur Jellyfin) et clé API, puis « Enregistrer et tester Prowlarr » → choisir l'indexeur **C411** dans la liste.
+1. **Source des torrents** : par défaut **C411 en direct** → URL de l'API (`https://c411.org/api`, celle indiquée par C411 pour Radarr / Sonarr) et clé API C411, puis « Enregistrer et tester C411 ». Option « Via Prowlarr » si C411 est configuré dans un Prowlarr : URL et clé API de Prowlarr, puis choisir l'indexeur C411 dans la liste.
+   Le NAS doit pouvoir joindre `c411.org` : si le test indique un certificat dont le nom ne correspond pas, le DNS du NAS renvoie vers un autre serveur (réglage réseau du NAS).
 2. **Torbox** : clé API, puis « Enregistrer et tester Torbox ».
 3. **Validation automatique** : seuils en Go (0 = désactivé) et nombre minimum de seeders.
 4. **Notifications** : webhook Discord facultatif.
@@ -68,6 +69,6 @@ dotnet test
 ```
 
 - `src/Jellyfin.Plugin.C411Torbox` : le plugin (API, services, pages web embarquées).
-- `tests/Jellyfin.Plugin.C411Torbox.Tests` : tests unitaires et scénarios complets (SQLite réel, Prowlarr/Torbox simulés).
+- `tests/Jellyfin.Plugin.C411Torbox.Tests` : tests unitaires et scénarios complets (SQLite réel, C411/Prowlarr/Torbox simulés).
 
 Les packages `Jellyfin.Controller` / `Jellyfin.Model` sont épinglés en **12.2.0** et `Microsoft.Data.Sqlite` en **10.0.11** (version embarquée par Jellyfin 12.2). Ces assemblies ne sont pas copiées avec le plugin : elles sont fournies par le serveur.

@@ -7,6 +7,9 @@ namespace Jellyfin.Plugin.C411Torbox.Tests;
 
 public class TorrentSearchServiceTests
 {
+    private static IndexerProvider Indexers(FakeHttp http, FakeConfig config)
+        => new(new ProwlarrClient(http, config), new TorznabClient(http, config), config);
+
     [Fact]
     public void Sort_PutsTorboxCachedFirst_ThenSeeders()
     {
@@ -24,7 +27,7 @@ public class TorrentSearchServiceTests
     [Fact]
     public void BuildQueries_Movie_IdThenTitle()
     {
-        var q = TorrentSearchService.BuildQueries(
+        var q = ProwlarrClient.BuildQueries(
             new TorrentSearchRequest { Kind = MediaKind.Movie, Name = "Dune", Year = 2021, ProviderIds = new() { ["imdb"] = "tt1160419", ["Tmdb"] = "438631" } },
             new PluginConfiguration { MovieCategories = "2000, 2040" });
 
@@ -38,13 +41,13 @@ public class TorrentSearchServiceTests
     public void BuildQueries_SeriesEpisodeAndSeason()
     {
         var cfg = new PluginConfiguration();
-        var ep = TorrentSearchService.BuildQueries(
+        var ep = ProwlarrClient.BuildQueries(
             new TorrentSearchRequest { Kind = MediaKind.Series, Name = "The Bear", Season = 2, Episode = 3, ProviderIds = new() { ["Tvdb"] = "403245" } }, cfg);
         Assert.Equal("{TvdbId:403245}{Season:2}{Episode:3}", ep[0].Query);
         Assert.Equal("tvsearch", ep[0].Type);
         Assert.Equal("The Bear S02E03", ep[1].Query);
 
-        var season = TorrentSearchService.BuildQueries(
+        var season = ProwlarrClient.BuildQueries(
             new TorrentSearchRequest { Kind = MediaKind.Series, Name = "The Bear", Season = 1 }, cfg);
         Assert.Equal("The Bear S01", Assert.Single(season).Query);
     }
@@ -74,7 +77,7 @@ public class TorrentSearchServiceTests
         });
         var config = new FakeConfig();
         var service = new TorrentSearchService(
-            new ProwlarrClient(http, config), new TorboxClient(http, config), new FakeLibrary(), new SearchResultCache(), config, NullLogger<TorrentSearchService>.Instance);
+            Indexers(http, config), new TorboxClient(http, config), new FakeLibrary(), new SearchResultCache(), config, NullLogger<TorrentSearchService>.Instance);
 
         var response = await service.SearchAsync(
             new TorrentSearchRequest { Kind = MediaKind.Movie, Name = "Film", ProviderIds = new() { ["Imdb"] = "tt1" } }, CancellationToken.None);
@@ -97,7 +100,7 @@ public class TorrentSearchServiceTests
         var http = new FakeHttp((_, _) => throw new InvalidOperationException("ne doit pas être appelé"));
         var config = new FakeConfig();
         var service = new TorrentSearchService(
-            new ProwlarrClient(http, config), new TorboxClient(http, config), new FakeLibrary { MovieInLibrary = true }, new SearchResultCache(), config, NullLogger<TorrentSearchService>.Instance);
+            Indexers(http, config), new TorboxClient(http, config), new FakeLibrary { MovieInLibrary = true }, new SearchResultCache(), config, NullLogger<TorrentSearchService>.Instance);
 
         var response = await service.SearchAsync(new TorrentSearchRequest { Kind = MediaKind.Movie, Name = "Film" }, CancellationToken.None);
 

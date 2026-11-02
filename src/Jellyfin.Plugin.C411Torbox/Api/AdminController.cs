@@ -21,14 +21,31 @@ public class AdminController : C411TorboxControllerBase
     private readonly RequestService _requests;
     private readonly RequestRepository _repository;
     private readonly ProwlarrClient _prowlarr;
+    private readonly TorznabClient _torznab;
     private readonly TorboxClient _torbox;
 
-    public AdminController(RequestService requests, RequestRepository repository, ProwlarrClient prowlarr, TorboxClient torbox)
+    public AdminController(RequestService requests, RequestRepository repository, ProwlarrClient prowlarr, TorznabClient torznab, TorboxClient torbox)
     {
         _requests = requests;
         _repository = repository;
         _prowlarr = prowlarr;
+        _torznab = torznab;
         _torbox = torbox;
+    }
+
+    /// <summary>Teste l'accès direct à C411 (Torznab) : adresse, certificat et clé API.</summary>
+    [HttpGet("Test/Torznab")]
+    public async Task<ActionResult> TestTorznab(CancellationToken ct)
+    {
+        try
+        {
+            var message = await _torznab.TestAsync(ct).ConfigureAwait(false);
+            return JsonOk(new ConnectionTestResult { Success = true, Message = message });
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException or UriFormatException)
+        {
+            return JsonOk(new ConnectionTestResult { Success = false, Message = "Échec : " + ex.Message });
+        }
     }
 
     [HttpGet("Requests")]

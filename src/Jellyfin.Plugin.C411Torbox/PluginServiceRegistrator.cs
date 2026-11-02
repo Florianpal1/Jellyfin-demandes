@@ -18,13 +18,14 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
 {
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
-        // Les redirections sont suivies manuellement (certaines mènent à un lien magnet).
+        // Client de la source des torrents (C411 Torznab ou Prowlarr). Les redirections sont suivies
+        // manuellement (certaines mènent à un lien magnet).
         serviceCollection.AddHttpClient(ProwlarrClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(60))
             .ConfigurePrimaryHttpMessageHandler(sp =>
             {
                 var config = sp.GetRequiredService<IConfigProvider>();
                 var diagnostics = sp.GetRequiredService<CertificateDiagnostics>();
-                var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("C411Torbox.Prowlarr");
+                var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("C411Torbox.Indexer");
                 return new HttpClientHandler
                 {
                     AllowAutoRedirect = false,
@@ -51,7 +52,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
                             cert?.Subject,
                             cert?.Issuer,
                             details);
-                        return config.Current.ProwlarrIgnoreCertificateErrors;
+                        // Jamais pour C411 en direct (site public avec un vrai certificat).
+                        return config.Current.IndexerMode == Configuration.IndexerMode.Prowlarr
+                            && config.Current.ProwlarrIgnoreCertificateErrors;
                     },
                 };
             });
@@ -67,6 +70,8 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         });
         serviceCollection.AddSingleton<SearchResultCache>();
         serviceCollection.AddSingleton<ProwlarrClient>();
+        serviceCollection.AddSingleton<TorznabClient>();
+        serviceCollection.AddSingleton<IndexerProvider>();
         serviceCollection.AddSingleton<TorboxClient>();
         serviceCollection.AddSingleton<ILibraryLookup, LibraryLookup>();
         serviceCollection.AddSingleton<MetadataSearchService>();

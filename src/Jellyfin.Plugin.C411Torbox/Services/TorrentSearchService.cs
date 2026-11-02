@@ -12,14 +12,14 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.C411Torbox.Services;
 
 /// <summary>
-/// Recherche de torrents pour un média : Prowlarr (C411) → infohash → cache Torbox → tri.
+/// Recherche de torrents pour un média : C411 (Torznab direct ou via Prowlarr) → infohash → cache Torbox → tri.
 /// Tri : en cache Torbox d'abord, puis seeders décroissants.
 /// </summary>
 public class TorrentSearchService
 {
     private const int MaxParallelDownloads = 4;
 
-    private readonly ProwlarrClient _prowlarr;
+    private readonly IndexerProvider _indexers;
     private readonly TorboxClient _torbox;
     private readonly ILibraryLookup _library;
     private readonly SearchResultCache _cache;
@@ -27,14 +27,14 @@ public class TorrentSearchService
     private readonly ILogger<TorrentSearchService> _logger;
 
     public TorrentSearchService(
-        ProwlarrClient prowlarr,
+        IndexerProvider indexers,
         TorboxClient torbox,
         ILibraryLookup library,
         SearchResultCache cache,
         IConfigProvider config,
         ILogger<TorrentSearchService> logger)
     {
-        _prowlarr = prowlarr;
+        _indexers = indexers;
         _torbox = torbox;
         _library = library;
         _cache = cache;
@@ -67,8 +67,9 @@ public class TorrentSearchService
             return response;
         }
 
-        var results = await QueryProwlarrAsync(request, ct).ConfigureAwait(false);
-        var sources = await FillMissingHashesAsync(results, cfg.HashLookupLimit, warnings, ct).ConfigureAwait(false);
+        var indexer = _indexers.Current;
+        var results = (await indexer.SearchAsync(request, ct).ConfigureAwait(false)).ToList();
+        var sources = await FillMissingHashesAsync(indexer, results, cfg.HashLookupLimit, warnings, ct).ConfigureAwait(false);
 
         var hashes = results.Select(r => r.InfoHash).OfType<string>().ToList();
         if (hashes.Count > 0 && !string.IsNullOrWhiteSpace(cfg.TorboxApiKey))
@@ -109,57 +110,6 @@ public class TorrentSearchService
             .ThenByDescending(r => r.PublishDate ?? DateTime.MinValue)
             .ToList();
 
-    /// <summary>
-    /// Requêtes Prowlarr à essayer dans l'ordre : par identifiant d'abord (plus précis),
-    /// puis par titre si l'indexeur ne supporte pas la recherche par identifiant.
-    /// </summary>
-    public static IReadOnlyList<ProwlarrQuery> BuildQueries(TorrentSearchRequest request, Configuration.PluginConfiguration cfg)
-    {
-        var ids = LibraryLookup.FilterIds(request.ProviderIds);
-        var queries = new List<ProwlarrQuery>();
-        if (request.Kind == MediaKind.Movie)
-        {
-            var cats = JsonElementExtensions.ParseIntList(cfg.MovieCategories).ToList();
-            if (ids.TryGetValue("Imdb", out var imdb))
-            {
-                queries.Add(new ProwlarrQuery($"{{ImdbId:{imdb}}}", "movie", cats));
-            }
-            else if (ids.TryGetValue("Tmdb", out var tmdb))
-            {
-                queries.Add(new ProwlarrQuery($"{{TmdbId:{tmdb}}}", "movie", cats));
-            }
-
-            var text = request.Year.HasValue
-                ? string.Create(CultureInfo.InvariantCulture, $"{request.Name} {request.Year}")
-                : request.Name;
-            queries.Add(new ProwlarrQuery(text, "search", cats));
-        }
-        else
-        {
-            var cats = JsonElementExtensions.ParseIntList(cfg.TvCategories).ToList();
-            var season = request.Season!.Value;
-            var epToken = request.Episode.HasValue
-                ? string.Create(CultureInfo.InvariantCulture, $"{{Episode:{request.Episode.Value}}}")
-                : string.Empty;
-            var seasonToken = string.Create(CultureInfo.InvariantCulture, $"{{Season:{season}}}");
-            if (ids.TryGetValue("Tvdb", out var tvdb))
-            {
-                queries.Add(new ProwlarrQuery($"{{TvdbId:{tvdb}}}{seasonToken}{epToken}", "tvsearch", cats));
-            }
-            else if (ids.TryGetValue("Imdb", out var imdb))
-            {
-                queries.Add(new ProwlarrQuery($"{{ImdbId:{imdb}}}{seasonToken}{epToken}", "tvsearch", cats));
-            }
-
-            var sxx = request.Episode.HasValue
-                ? string.Create(CultureInfo.InvariantCulture, $"S{season:00}E{request.Episode.Value:00}")
-                : string.Create(CultureInfo.InvariantCulture, $"S{season:00}");
-            queries.Add(new ProwlarrQuery($"{request.Name} {sxx}", "search", cats));
-        }
-
-        return queries;
-    }
-
     private static void Validate(TorrentSearchRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Name))
@@ -179,40 +129,12 @@ public class TorrentSearchService
         }
     }
 
-    private async Task<List<TorrentResult>> QueryProwlarrAsync(TorrentSearchRequest request, CancellationToken ct)
-    {
-        Exception? lastError = null;
-        foreach (var query in BuildQueries(request, _config.Current))
-        {
-            try
-            {
-                var results = await _prowlarr.SearchAsync(query, ct).ConfigureAwait(false);
-                if (results.Count > 0)
-                {
-                    return results.ToList();
-                }
-            }
-            catch (HttpRequestException ex)
-            {
-                // Une recherche par identifiant peut être refusée si C411 ne la supporte pas : on passe à la suivante.
-                _logger.LogWarning(ex, "Recherche Prowlarr échouée pour « {Query} »", query.Query);
-                lastError = ex;
-            }
-        }
-
-        if (lastError is not null)
-        {
-            throw new HttpRequestException(lastError.Message, lastError);
-        }
-
-        return new List<TorrentResult>();
-    }
-
     /// <summary>
     /// Calcule l'infohash manquant en téléchargeant le .torrent, pour les N meilleurs résultats seulement
     /// (chaque téléchargement peut compter sur C411). Les fichiers sont gardés pour un envoi ultérieur.
     /// </summary>
     private async Task<Dictionary<TorrentResult, TorrentSource>> FillMissingHashesAsync(
+        ITorrentIndexer indexer,
         List<TorrentResult> results,
         int limit,
         List<string> warnings,
@@ -233,7 +155,7 @@ public class TorrentSearchService
             {
                 try
                 {
-                    var source = await _prowlarr.DownloadAsync(r.DownloadUrl!, token).ConfigureAwait(false);
+                    var source = await indexer.DownloadAsync(r.DownloadUrl!, token).ConfigureAwait(false);
                     r.InfoHash = source.File is not null ? TorrentHash.FromTorrentFile(source.File) : TorrentHash.FromMagnet(source.Magnet);
                     sources[r] = source;
                 }
