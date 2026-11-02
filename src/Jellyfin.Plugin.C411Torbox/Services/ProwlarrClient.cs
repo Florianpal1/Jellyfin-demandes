@@ -125,7 +125,7 @@ public class ProwlarrClient
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Add("X-Api-Key", _config.Current.ProwlarrApiKey);
-            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            using var response = await SendAsync(client, request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
 
             if (IsRedirect(response.StatusCode))
             {
@@ -171,6 +171,23 @@ public class ProwlarrClient
 
     private static bool IsRedirect(HttpStatusCode code) => (int)code is >= 300 and < 400;
 
+    /// <summary>Envoie la requête en remplaçant les erreurs réseau par un message lisible.</summary>
+    private static async Task<HttpResponseMessage> SendAsync(HttpClient client, HttpRequestMessage request, HttpCompletionOption option, CancellationToken ct)
+    {
+        try
+        {
+            return await client.SendAsync(request, option, ct).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new HttpRequestException("Prowlarr injoignable : " + NetworkErrors.Describe(ex), ex);
+        }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            throw new HttpRequestException("Prowlarr injoignable : " + NetworkErrors.Describe(ex), ex);
+        }
+    }
+
     private async Task<JsonDocument> GetJsonAsync(string relativeUrl, CancellationToken ct)
     {
         var cfg = _config.Current;
@@ -179,12 +196,22 @@ public class ProwlarrClient
             throw new InvalidOperationException("Prowlarr n'est pas configuré (URL et clé API).");
         }
 
+        if (!Uri.TryCreate(cfg.ProwlarrUrl.Trim().TrimEnd('/') + "/", UriKind.Absolute, out var baseUri)
+            || (baseUri.Scheme != Uri.UriSchemeHttp && baseUri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new InvalidOperationException("URL de Prowlarr invalide (attendu : http://adresse:9696).");
+        }
+
         var client = _httpClientFactory.CreateClient(HttpClientName);
-        var baseUri = new Uri(cfg.ProwlarrUrl.TrimEnd('/') + "/");
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(baseUri, relativeUrl));
         request.Headers.Add("X-Api-Key", cfg.ProwlarrApiKey);
         request.Headers.Accept.ParseAdd("application/json");
-        using var response = await client.SendAsync(request, ct).ConfigureAwait(false);
+        using var response = await SendAsync(client, request, HttpCompletionOption.ResponseContentRead, ct).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            throw new HttpRequestException("Prowlarr a refusé la clé API (HTTP 401).");
+        }
+
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException($"Prowlarr a répondu HTTP {(int)response.StatusCode}.");

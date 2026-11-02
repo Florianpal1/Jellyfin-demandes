@@ -13,6 +13,12 @@ public class PluginConfiguration : BasePluginConfiguration
 
     public string ProwlarrApiKey { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Accepte un certificat HTTPS non valide (auto-signé) pour Prowlarr uniquement.
+    /// À n'activer que pour un Prowlarr du réseau local.
+    /// </summary>
+    public bool ProwlarrIgnoreCertificateErrors { get; set; }
+
     /// <summary>Identifiant de l'indexeur C411 dans Prowlarr (0 = non configuré).</summary>
     public int ProwlarrIndexerId { get; set; }
 

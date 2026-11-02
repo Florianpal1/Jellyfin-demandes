@@ -206,7 +206,7 @@ public class TorboxClient
         }
         catch (HttpRequestException ex)
         {
-            throw new TorboxException("Torbox injoignable : " + ex.Message, ex);
+            throw new TorboxException("Torbox injoignable : " + NetworkErrors.Describe(ex), ex);
         }
 
         using (response)

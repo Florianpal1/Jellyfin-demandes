@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Net.Http;
+using System.Net.Security;
 using Jellyfin.Plugin.C411Torbox.Data;
 using Jellyfin.Plugin.C411Torbox.Services;
 using MediaBrowser.Common.Configuration;
@@ -17,7 +18,18 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     {
         // Les redirections sont suivies manuellement (certaines mènent à un lien magnet).
         serviceCollection.AddHttpClient(ProwlarrClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(60))
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+            .ConfigurePrimaryHttpMessageHandler(sp =>
+            {
+                var config = sp.GetRequiredService<IConfigProvider>();
+                return new HttpClientHandler
+                {
+                    AllowAutoRedirect = false,
+
+                    // Option lue à chaque connexion : la cocher/décocher s'applique sans redémarrage.
+                    ServerCertificateCustomValidationCallback = (_, _, _, errors)
+                        => errors == SslPolicyErrors.None || config.Current.ProwlarrIgnoreCertificateErrors,
+                };
+            });
         serviceCollection.AddHttpClient(TorboxClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(60));
         serviceCollection.AddHttpClient(NotificationService.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(10));
 
