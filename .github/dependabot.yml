@@ -1,0 +1,37 @@
+# Mises à jour automatiques des dépendances (Dependabot).
+# Les alertes de sécurité Dependabot sont activées dans Settings > Code security ;
+# ce fichier règle en plus les PR de mise à jour de version.
+version: 2
+updates:
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      timezone: "Europe/Paris"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    ignore:
+      # Fournis par le serveur et épinglés sur sa version (Jellyfin 12.2) : une version plus
+      # récente compilerait contre des API absentes du serveur. À monter avec le serveur.
+      - dependency-name: "Jellyfin.Controller"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "Jellyfin.Model"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # Doit rester identique à la version embarquée par Jellyfin 12.2 (DLL non copiée avec le plugin).
+      - dependency-name: "Microsoft.Data.Sqlite"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    groups:
+      tests:
+        patterns:
+          - "xunit*"
+          - "Microsoft.NET.Test.Sdk"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      timezone: "Europe/Paris"
+    commit-message:
+      prefix: "ci"
