@@ -11,7 +11,7 @@ namespace Jellyfin.Plugin.C411Torbox.Data;
 /// <summary>Stockage SQLite des demandes et des notifications.</summary>
 public class RequestRepository
 {
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
 
     private static readonly RequestStatus[] ActiveStatuses =
     [
@@ -21,6 +21,9 @@ public class RequestRepository
         RequestStatus.SentToTorbox,
         RequestStatus.DownloadingOnTorbox,
         RequestStatus.CompletedOnTorbox,
+        RequestStatus.Importing,
+        RequestStatus.Imported,
+        RequestStatus.ImportFailed,
     ];
 
     private readonly string _connectionString;
@@ -76,7 +79,8 @@ public class RequestRepository
             cmd.CommandText = """
                 UPDATE Requests SET UpdatedAt=$UpdatedAt, TorrentTitle=$TorrentTitle, InfoHash=$InfoHash, MagnetUrl=$MagnetUrl, DownloadUrl=$DownloadUrl,
                     AutoApprovalReason=$AutoApprovalReason, Status=$Status, ReviewedBy=$ReviewedBy, ReviewedAt=$ReviewedAt, RejectReason=$RejectReason,
-                    TorboxTorrentId=$TorboxTorrentId, TorboxProgress=$TorboxProgress, LastError=$LastError
+                    TorboxTorrentId=$TorboxTorrentId, TorboxProgress=$TorboxProgress, LastError=$LastError,
+                    ImportProgress=$ImportProgress, ImportedPath=$ImportedPath
                 WHERE Id=$Id;
                 """;
             r.UpdatedAt = DateTime.UtcNow;
@@ -205,6 +209,8 @@ public class RequestRepository
         Add("$TorboxProgress", r.TorboxProgress);
         Add("$LastError", r.LastError);
         Add("$EpisodesInLibraryAtRequest", r.EpisodesInLibraryAtRequest);
+        Add("$ImportProgress", r.ImportProgress);
+        Add("$ImportedPath", r.ImportedPath);
     }
 
     private static string ToDb(DateTime d) => d.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
@@ -262,6 +268,8 @@ public class RequestRepository
                 TorboxProgress = reader["TorboxProgress"] is double p ? p : null,
                 LastError = S("LastError"),
                 EpisodesInLibraryAtRequest = (int)(L("EpisodesInLibraryAtRequest") ?? 0),
+                ImportProgress = reader["ImportProgress"] is double ip ? ip : null,
+                ImportedPath = S("ImportedPath"),
             });
         }
 
@@ -294,9 +302,29 @@ public class RequestRepository
             }
 
             using var tx = conn.BeginTransaction();
-            using var create = conn.CreateCommand();
-            create.Transaction = tx;
-            create.CommandText = """
+            if (version < 1)
+            {
+                CreateSchemaV1(conn, tx);
+            }
+
+            // v2 : import automatique des fichiers vers le NAS.
+            using var v2 = conn.CreateCommand();
+            v2.Transaction = tx;
+            v2.CommandText = """
+                ALTER TABLE Requests ADD COLUMN ImportProgress REAL NULL;
+                ALTER TABLE Requests ADD COLUMN ImportedPath TEXT NULL;
+                PRAGMA user_version = 2;
+                """;
+            v2.ExecuteNonQuery();
+            tx.Commit();
+        }
+    }
+
+    private static void CreateSchemaV1(SqliteConnection conn, SqliteTransaction tx)
+    {
+        using var create = conn.CreateCommand();
+        create.Transaction = tx;
+        create.CommandText = """
                 CREATE TABLE IF NOT EXISTS Requests (
                     Id INTEGER PRIMARY KEY AUTOINCREMENT,
                     UserId TEXT NOT NULL,
@@ -344,10 +372,7 @@ public class RequestRepository
                     ReadAt TEXT NULL
                 );
                 CREATE INDEX IF NOT EXISTS IX_Notifications_UserId ON Notifications (UserId);
-                PRAGMA user_version = 1;
                 """;
-            create.ExecuteNonQuery();
-            tx.Commit();
-        }
+        create.ExecuteNonQuery();
     }
 }

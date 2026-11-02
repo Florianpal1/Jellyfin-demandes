@@ -26,8 +26,15 @@ public class RequestException : Exception
 /// <summary>Cycle de vie des demandes : création, auto-validation, validation admin, envoi Torbox, suivi.</summary>
 public class RequestService
 {
+    /// <summary>Statuts où le média peut apparaître dans la bibliothèque. Pas « Importing » : l'import en cours finit d'abord.</summary>
     private static readonly RequestStatus[] SentStatuses =
-        [RequestStatus.SentToTorbox, RequestStatus.DownloadingOnTorbox, RequestStatus.CompletedOnTorbox];
+    [
+        RequestStatus.SentToTorbox,
+        RequestStatus.DownloadingOnTorbox,
+        RequestStatus.CompletedOnTorbox,
+        RequestStatus.Imported,
+        RequestStatus.ImportFailed,
+    ];
 
     private readonly RequestRepository _repository;
     private readonly SearchResultCache _cache;
@@ -217,6 +224,62 @@ public class RequestService
             _lock.Release();
         }
     }
+
+    /// <summary>Relance le téléchargement vers le NAS d'une demande dont l'import a échoué (et des demandes du même torrent).</summary>
+    public async Task<MediaRequest> RetryImportAsync(long id, CancellationToken ct)
+    {
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var request = _repository.Get(id) ?? throw new RequestException("Demande introuvable.", 404);
+            if (request.Status != RequestStatus.ImportFailed)
+            {
+                throw new RequestException("Seul un rangement en échec peut être relancé.", 409);
+            }
+
+            foreach (var r in SameTorrent(request, RequestStatus.ImportFailed))
+            {
+                r.Status = RequestStatus.CompletedOnTorbox;
+                r.LastError = null;
+                r.ImportProgress = null;
+                _repository.Update(r);
+            }
+
+            return _repository.Get(id)!;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Applique <paramref name="apply"/> (sous le verrou, sur des données relues) aux demandes actives qui vérifient
+    /// <paramref name="filter"/>. Renvoie les demandes modifiées.
+    /// </summary>
+    internal async Task<IReadOnlyList<MediaRequest>> UpdateActiveAsync(Func<MediaRequest, bool> filter, Action<MediaRequest> apply, CancellationToken ct)
+    {
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var changed = _repository.GetActive().Where(filter).ToList();
+            foreach (var r in changed)
+            {
+                apply(r);
+                _repository.Update(r);
+            }
+
+            return changed;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>Au démarrage : un import interrompu par un arrêt du serveur repart (le fichier partiel est repris).</summary>
+    public Task ResetInterruptedImportsAsync(CancellationToken ct)
+        => UpdateActiveAsync(r => r.Status == RequestStatus.Importing, r => r.Status = RequestStatus.CompletedOnTorbox, ct);
 
     /// <summary>Met à jour la progression Torbox des demandes envoyées.</summary>
     public async Task RefreshTorboxStatusAsync(CancellationToken ct)

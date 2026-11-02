@@ -75,6 +75,12 @@ public class MediaRequest
 
     public string? LastError { get; set; }
 
+    /// <summary>Progression du téléchargement vers le NAS entre 0 et 1.</summary>
+    public double? ImportProgress { get; set; }
+
+    /// <summary>Dossier de la bibliothèque où les fichiers ont été rangés.</summary>
+    public string? ImportedPath { get; set; }
+
     /// <summary>Pour un pack de saison : épisodes déjà présents au moment de la demande.</summary>
     public int EpisodesInLibraryAtRequest { get; set; }
 }

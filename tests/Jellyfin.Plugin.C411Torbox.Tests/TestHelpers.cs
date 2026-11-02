@@ -58,8 +58,26 @@ internal sealed class FakeLibrary : ILibraryLookup
 
     public bool IsSeriesInLibrary(IReadOnlyDictionary<string, string> providerIds) => Episodes > 0;
 
+    /// <summary>Épisodes précis présents (saison, épisode) ; s'ils sont renseignés, remplacent <see cref="Episodes"/>.</summary>
+    public HashSet<(int Season, int Episode)> PresentEpisodes { get; } = new();
+
+    public string? SeriesFolder { get; set; }
+
+    public List<string> MovieFolders { get; } = new();
+
+    public List<string> SeriesFolders { get; } = new();
+
     public int CountEpisodes(IReadOnlyDictionary<string, string> providerIds, int season, int? episode)
-        => episode.HasValue ? Math.Min(Episodes, 1) : Episodes;
+        => PresentEpisodes.Count > 0
+            ? PresentEpisodes.Count(p => p.Season == season && (episode is null || p.Episode == episode))
+            : episode.HasValue ? Math.Min(Episodes, 1) : Episodes;
+
+    public string? GetSeriesFolder(IReadOnlyDictionary<string, string> providerIds) => SeriesFolder;
+
+    public string? GetSeasonFolder(IReadOnlyDictionary<string, string> providerIds, int season) => null;
+
+    public IReadOnlyList<string> GetLibraryFolders(Models.MediaKind kind)
+        => kind == Models.MediaKind.Movie ? MovieFolders : SeriesFolders;
 }
 
 internal sealed class FakeNotifications : INotificationService

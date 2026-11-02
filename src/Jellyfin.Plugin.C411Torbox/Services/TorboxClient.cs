@@ -12,7 +12,14 @@ namespace Jellyfin.Plugin.C411Torbox.Services;
 
 public sealed record TorboxCreateResult(long? TorrentId, string? Hash);
 
-public sealed record TorboxTorrent(long Id, string? Hash, string? Name, double Progress, string? DownloadState, bool DownloadFinished);
+public sealed record TorboxTorrent(long Id, string? Hash, string? Name, double Progress, string? DownloadState, bool DownloadFinished)
+{
+    /// <summary>Fichiers du torrent (renseignés une fois le téléchargement Torbox terminé).</summary>
+    public IReadOnlyList<TorboxFile> Files { get; init; } = Array.Empty<TorboxFile>();
+}
+
+/// <summary>Fichier d'un torrent Torbox. <paramref name="Name"/> contient le chemin relatif (dossiers du torrent compris).</summary>
+public sealed record TorboxFile(long Id, string Name, long Size);
 
 /// <summary>Erreur renvoyée par l'API Torbox.</summary>
 public class TorboxException : Exception
@@ -30,7 +37,7 @@ public class TorboxException : Exception
 
 /// <summary>
 /// Client de l'API Torbox v1 (https://api.torbox.app, spécification : /openapi.json).
-/// Le plugin n'écrit sur Torbox que via <see cref="CreateTorrentAsync"/>.
+/// Écritures : ajout (<see cref="CreateTorrentAsync"/>) et, si l'option est cochée, suppression après rangement.
 /// </summary>
 public class TorboxClient
 {
@@ -163,17 +170,85 @@ public class TorboxClient
 
         foreach (var item in data.EnumerateArray())
         {
-            list.Add(new TorboxTorrent(
-                item.GetLong("id"),
-                TorrentHash.Normalize(item.GetStringOrNull("hash")),
-                item.GetStringOrNull("name"),
-                item.GetDoubleOrNull("progress") ?? 0,
-                item.GetStringOrNull("download_state"),
-                item.GetBool("download_finished")));
+            list.Add(ParseTorrent(item));
         }
 
         return list;
     }
+
+    /// <summary>Un torrent précis, avec la liste de ses fichiers (null s'il n'existe plus sur Torbox).</summary>
+    public async Task<TorboxTorrent?> GetTorrentAsync(long torrentId, CancellationToken ct)
+    {
+        using var request = CreateRequest(HttpMethod.Get, Invariant($"torrents/mylist?bypass_cache=true&id={torrentId}"));
+        using var doc = await SendAsync(request, ct).ConfigureAwait(false);
+        if (!doc.RootElement.TryGetProperty("data", out var data))
+        {
+            return null;
+        }
+
+        // Selon les versions de l'API, « id » renvoie l'objet seul ou une liste d'un élément.
+        return data.ValueKind switch
+        {
+            JsonValueKind.Object => ParseTorrent(data),
+            JsonValueKind.Array => data.EnumerateArray().Select(ParseTorrent).FirstOrDefault(t => t.Id == torrentId),
+            _ => null,
+        };
+    }
+
+    internal static TorboxTorrent ParseTorrent(JsonElement item)
+    {
+        var files = new List<TorboxFile>();
+        if (item.TryGetProperty("files", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var f in arr.EnumerateArray())
+            {
+                var name = f.GetStringOrNull("name") ?? f.GetStringOrNull("short_name");
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    files.Add(new TorboxFile(f.GetLong("id"), name, f.GetLong("size")));
+                }
+            }
+        }
+
+        return new TorboxTorrent(
+            item.GetLong("id"),
+            TorrentHash.Normalize(item.GetStringOrNull("hash")),
+            item.GetStringOrNull("name"),
+            item.GetDoubleOrNull("progress") ?? 0,
+            item.GetStringOrNull("download_state"),
+            item.GetBool("download_finished"))
+        {
+            Files = files,
+        };
+    }
+
+    /// <summary>Lien de téléchargement direct (temporaire) d'un fichier d'un torrent terminé.</summary>
+    public async Task<Uri> RequestDownloadUrlAsync(long torrentId, long fileId, CancellationToken ct)
+    {
+        // L'API attend la clé en paramètre « token » sur cet appel ; elle n'est jamais journalisée par le plugin.
+        var token = Uri.EscapeDataString(_config.Current.TorboxApiKey.Trim());
+        using var request = CreateRequest(
+            HttpMethod.Get,
+            Invariant($"torrents/requestdl?token={token}&torrent_id={torrentId}&file_id={fileId}&zip_link=false"));
+        using var doc = await SendAsync(request, ct).ConfigureAwait(false);
+        var url = doc.RootElement.GetStringOrNull("data");
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        {
+            throw new TorboxException("Torbox n'a pas renvoyé de lien de téléchargement.");
+        }
+
+        return uri;
+    }
+
+    /// <summary>Supprime un torrent de Torbox (les fichiers déjà rangés sur le NAS ne sont pas touchés).</summary>
+    public async Task DeleteTorrentAsync(long torrentId, CancellationToken ct)
+    {
+        using var request = CreateRequest(HttpMethod.Post, "torrents/controltorrent");
+        request.Content = JsonContent.Create(new { torrent_id = torrentId, operation = "delete" });
+        using var doc = await SendAsync(request, ct).ConfigureAwait(false);
+    }
+
+    private static string Invariant(FormattableString s) => FormattableString.Invariant(s);
 
     /// <summary>Vérifie que la clé API est valide.</summary>
     public async Task TestAsync(CancellationToken ct)

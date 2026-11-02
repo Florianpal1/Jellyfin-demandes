@@ -173,9 +173,9 @@ tr.cached { background: rgba(0, 164, 220, .08); }
 .pill.flash { background: var(--accent); border-color: var(--accent); color: #fff; }
 .pill.auto { border-color: var(--ok); color: var(--ok); }
 .pill.st-Pending { border-color: var(--warn); color: var(--warn); }
-.pill.st-Rejected, .pill.st-Failed { border-color: var(--bad); color: var(--bad); }
+.pill.st-Rejected, .pill.st-Failed, .pill.st-ImportFailed { border-color: var(--bad); color: var(--bad); }
 .pill.st-Available { background: var(--ok); border-color: var(--ok); color: #fff; }
-.pill.st-SentToTorbox, .pill.st-DownloadingOnTorbox, .pill.st-CompletedOnTorbox, .pill.st-Approved, .pill.st-AutoApproved { border-color: var(--accent); color: var(--accent); }
+.pill.st-SentToTorbox, .pill.st-DownloadingOnTorbox, .pill.st-CompletedOnTorbox, .pill.st-Importing, .pill.st-Imported, .pill.st-Approved, .pill.st-AutoApproved { border-color: var(--accent); color: var(--accent); }
 
 .progress { height: 4px; background: var(--panel-2); border-radius: 2px; margin-top: 4px; min-width: 80px; }
 .progress > div { height: 100%; background: var(--accent); border-radius: 2px; }

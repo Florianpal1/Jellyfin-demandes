@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Entities;
 
 namespace Jellyfin.Plugin.C411Torbox.Services;
 
@@ -16,6 +18,15 @@ public interface ILibraryLookup
 
     /// <summary>Nombre d'épisodes présents pour une saison (ou un épisode précis si <paramref name="episode"/> est renseigné).</summary>
     int CountEpisodes(IReadOnlyDictionary<string, string> providerIds, int season, int? episode);
+
+    /// <summary>Dossier d'une série déjà présente dans la bibliothèque (pour y ranger les nouveaux épisodes), sinon null.</summary>
+    string? GetSeriesFolder(IReadOnlyDictionary<string, string> providerIds);
+
+    /// <summary>Dossier existant d'une saison de la série, sinon null.</summary>
+    string? GetSeasonFolder(IReadOnlyDictionary<string, string> providerIds, int season);
+
+    /// <summary>Dossiers des bibliothèques Jellyfin de type Films ou Séries.</summary>
+    IReadOnlyList<string> GetLibraryFolders(Models.MediaKind kind);
 }
 
 internal sealed class LibraryLookup : ILibraryLookup
@@ -71,6 +82,50 @@ internal sealed class LibraryLookup : ILibraryLookup
         }
 
         return count;
+    }
+
+    public string? GetSeriesFolder(IReadOnlyDictionary<string, string> providerIds)
+        => FindItems(BaseItemKind.Series, providerIds, 5)
+            .Select(s => s.Path)
+            .FirstOrDefault(p => !string.IsNullOrEmpty(p) && Directory.Exists(p));
+
+    public string? GetSeasonFolder(IReadOnlyDictionary<string, string> providerIds, int season)
+    {
+        foreach (var series in FindItems(BaseItemKind.Series, providerIds, 5))
+        {
+            var query = new InternalItemsQuery
+            {
+                IncludeItemTypes = [BaseItemKind.Season],
+                AncestorIds = [series.Id],
+                IndexNumber = season,
+                Recursive = true,
+                IsVirtualItem = false,
+            };
+
+            // Une saison sans dossier propre (épisodes à la racine de la série) a le chemin de la série : ignorée.
+            var path = _libraryManager.GetItemList(query)
+                .Select(s => s.Path)
+                .FirstOrDefault(p => !string.IsNullOrEmpty(p)
+                    && !string.Equals(p, series.Path, StringComparison.Ordinal)
+                    && Directory.Exists(p));
+            if (path is not null)
+            {
+                return path;
+            }
+        }
+
+        return null;
+    }
+
+    public IReadOnlyList<string> GetLibraryFolders(Models.MediaKind kind)
+    {
+        var type = kind == Models.MediaKind.Movie ? CollectionTypeOptions.movies : CollectionTypeOptions.tvshows;
+        return _libraryManager.GetVirtualFolders()
+            .Where(f => f.CollectionType == type)
+            .SelectMany(f => f.Locations ?? [])
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
     }
 
     private IReadOnlyList<BaseItem> FindItems(BaseItemKind kind, IReadOnlyDictionary<string, string> providerIds, int limit)

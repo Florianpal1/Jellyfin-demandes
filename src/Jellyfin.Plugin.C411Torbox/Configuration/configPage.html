@@ -104,6 +104,44 @@
                     </div>
 
                     <div class="verticalSection">
+                        <h3 class="sectionTitle">Téléchargement et rangement automatiques</h3>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="AutoImportEnabled" type="checkbox" is="emby-checkbox" />
+                                <span>Télécharger les torrents terminés sur le NAS et les ranger dans la bibliothèque</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">Remplace l'application « RealDebrid » + Radarr / Sonarr pour les demandes faites ici. Désactivez la récupération automatique de l'ancienne application, sinon les fichiers seront téléchargés deux fois.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="MoviesPath">Dossier des films</label>
+                            <input id="MoviesPath" type="text" is="emby-input" list="c411MovieLibraries" placeholder="vide = bibliothèque Films de Jellyfin" />
+                            <datalist id="c411MovieLibraries"></datalist>
+                            <div class="fieldDescription">Chemin vu par le serveur Jellyfin. Rangement : <code>Titre (2010) [tmdbid-27205]/Titre (2010) Bluray-1080p.mkv</code></div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SeriesPath">Dossier des séries</label>
+                            <input id="SeriesPath" type="text" is="emby-input" list="c411SeriesLibraries" placeholder="vide = bibliothèque Séries de Jellyfin" />
+                            <datalist id="c411SeriesLibraries"></datalist>
+                            <div class="fieldDescription">Rangement : <code>Titre (2008) [tmdbid-1396]/Season 01/Titre - S01E01 - Nom de l'épisode WEBDL-1080p.mkv</code>. Une série déjà présente garde son dossier actuel.</div>
+                        </div>
+                        <div class="checkboxContainer">
+                            <label class="emby-checkbox-label">
+                                <input id="ImportSubtitles" type="checkbox" is="emby-checkbox" />
+                                <span>Ranger aussi les sous-titres du torrent</span>
+                            </label>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="DeleteFromTorboxAfterImport" type="checkbox" is="emby-checkbox" />
+                                <span>Supprimer le torrent de Torbox une fois rangé</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">Libère un emplacement sur Torbox. Les fichiers rangés sur le NAS ne sont pas touchés.</div>
+                        </div>
+                        <button is="emby-button" type="button" id="btnTestImport" class="raised emby-button"><span>Enregistrer et vérifier les dossiers</span></button>
+                        <div id="importResult" class="fieldDescription"></div>
+                    </div>
+
+                    <div class="verticalSection">
                         <h3 class="sectionTitle">Validation automatique</h3>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label class="emby-checkbox-label">
@@ -151,7 +189,8 @@
             (function () {
                 var pluginId = 'a1beec8b-cc16-4382-96ca-8d4cdbfd032c';
                 var page = document.querySelector('#C411TorboxConfigPage');
-                var textFields = ['TorznabUrl', 'TorznabApiKey', 'ProwlarrUrl', 'ProwlarrApiKey', 'MovieCategories', 'TvCategories', 'TorboxApiKey', 'DiscordWebhookUrl'];
+                var textFields = ['TorznabUrl', 'TorznabApiKey', 'ProwlarrUrl', 'ProwlarrApiKey', 'MovieCategories', 'TvCategories', 'TorboxApiKey', 'DiscordWebhookUrl', 'MoviesPath', 'SeriesPath'];
+                var checkFields = ['AutoApproveWhenCached', 'ProwlarrIgnoreCertificateErrors', 'AutoImportEnabled', 'ImportSubtitles', 'DeleteFromTorboxAfterImport'];
                 var numberFields = ['HashLookupLimit', 'MovieMaxSizeGb', 'EpisodeMaxSizeGb', 'SeasonMaxSizeGb', 'MinSeedersForAutoApproval'];
                 var savedIndexerId = 0;
 
@@ -196,8 +235,7 @@
                     ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                         textFields.forEach(function (f) { q(f).value = config[f] || ''; });
                         numberFields.forEach(function (f) { q(f).value = config[f]; });
-                        q('AutoApproveWhenCached').checked = !!config.AutoApproveWhenCached;
-                        q('ProwlarrIgnoreCertificateErrors').checked = !!config.ProwlarrIgnoreCertificateErrors;
+                        checkFields.forEach(function (f) { q(f).checked = !!config[f]; });
                         savedIndexerId = config.ProwlarrIndexerId || 0;
                         setIndexerOptions([]);
                         q('IndexerMode').value = modeOf(config.IndexerMode);
@@ -212,8 +250,7 @@
                         numberFields.forEach(function (f) { config[f] = parseFloat(q(f).value) || 0; });
                         config.HashLookupLimit = Math.round(config.HashLookupLimit);
                         config.MinSeedersForAutoApproval = Math.round(config.MinSeedersForAutoApproval);
-                        config.AutoApproveWhenCached = q('AutoApproveWhenCached').checked;
-                        config.ProwlarrIgnoreCertificateErrors = q('ProwlarrIgnoreCertificateErrors').checked;
+                        checkFields.forEach(function (f) { config[f] = q(f).checked; });
                         config.ProwlarrIndexerId = parseInt(q('ProwlarrIndexerId').value, 10) || 0;
                         config.IndexerMode = q('IndexerMode').value;
                         savedIndexerId = config.ProwlarrIndexerId;
@@ -254,6 +291,28 @@
 
                 q('btnTestTorbox').addEventListener('click', function () {
                     test('C411Torbox/Admin/Test/Torbox', 'torboxResult');
+                });
+
+                function fillLibraries(id, folders) {
+                    var list = q(id);
+                    list.innerHTML = '';
+                    (folders || []).forEach(function (f) {
+                        var opt = document.createElement('option');
+                        opt.value = f;
+                        list.appendChild(opt);
+                    });
+                }
+
+                q('btnTestImport').addEventListener('click', function () {
+                    test('C411Torbox/Admin/Test/Import', 'importResult');
+                });
+
+                // Suggestions : dossiers des bibliothèques Jellyfin (champ vide = premier de la liste).
+                page.addEventListener('pageshow', function () {
+                    ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('C411Torbox/Admin/Test/Import'), dataType: 'json' }).then(function (res) {
+                        fillLibraries('c411MovieLibraries', res.movieLibraries);
+                        fillLibraries('c411SeriesLibraries', res.seriesLibraries);
+                    }).catch(function () { });
                 });
 
                 page.querySelector('#C411TorboxConfigForm').addEventListener('submit', function (e) {

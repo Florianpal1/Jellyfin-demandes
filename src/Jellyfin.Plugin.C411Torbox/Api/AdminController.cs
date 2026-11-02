@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
@@ -6,6 +8,7 @@ using System.Threading.Tasks;
 using Jellyfin.Plugin.C411Torbox.Data;
 using Jellyfin.Plugin.C411Torbox.Models;
 using Jellyfin.Plugin.C411Torbox.Services;
+using Jellyfin.Plugin.C411Torbox.Services.Import;
 using MediaBrowser.Common.Api;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -23,14 +26,25 @@ public class AdminController : C411TorboxControllerBase
     private readonly ProwlarrClient _prowlarr;
     private readonly TorznabClient _torznab;
     private readonly TorboxClient _torbox;
+    private readonly ImportService _import;
+    private readonly ILibraryLookup _library;
 
-    public AdminController(RequestService requests, RequestRepository repository, ProwlarrClient prowlarr, TorznabClient torznab, TorboxClient torbox)
+    public AdminController(
+        RequestService requests,
+        RequestRepository repository,
+        ProwlarrClient prowlarr,
+        TorznabClient torznab,
+        TorboxClient torbox,
+        ImportService import,
+        ILibraryLookup library)
     {
         _requests = requests;
         _repository = repository;
         _prowlarr = prowlarr;
         _torznab = torznab;
         _torbox = torbox;
+        _import = import;
+        _library = library;
     }
 
     /// <summary>Teste l'accès direct à C411 (Torznab) : adresse, certificat et clé API.</summary>
@@ -58,6 +72,59 @@ public class AdminController : C411TorboxControllerBase
     [HttpPost("Requests/{id}/Reject")]
     public Task<ActionResult> Reject([FromRoute] long id, [FromBody] RejectBody body, CancellationToken ct)
         => Run(() => _requests.RejectAsync(id, CurrentUserName, body.Reason, ct));
+
+    [HttpPost("Requests/{id}/RetryImport")]
+    public Task<ActionResult> RetryImport([FromRoute] long id, CancellationToken ct)
+        => Run(() => _requests.RetryImportAsync(id, ct));
+
+    /// <summary>Vérifie les dossiers de rangement (existence et droit d'écriture) et liste les bibliothèques Jellyfin.</summary>
+    [HttpGet("Test/Import")]
+    public ActionResult TestImport()
+    {
+        var lines = new List<string>();
+        bool ok = true;
+        foreach (var (kind, label) in new[] { (MediaKind.Movie, "Films"), (MediaKind.Series, "Séries") })
+        {
+            var root = _import.ResolveRoot(kind);
+            var check = CheckFolder(root);
+            ok &= check is null;
+            lines.Add($"{label} : {(root ?? "aucun dossier")} — {check ?? "OK"}");
+        }
+
+        return JsonOk(new
+        {
+            success = ok,
+            message = string.Join(" | ", lines),
+            movieLibraries = _library.GetLibraryFolders(MediaKind.Movie),
+            seriesLibraries = _library.GetLibraryFolders(MediaKind.Series),
+        });
+    }
+
+    /// <summary>Null si le dossier existe et est accessible en écriture, sinon la raison.</summary>
+    private static string? CheckFolder(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return "à renseigner (aucune bibliothèque Jellyfin de ce type)";
+        }
+
+        if (!Directory.Exists(path))
+        {
+            return "introuvable depuis le serveur Jellyfin";
+        }
+
+        var probe = Path.Combine(path, ".c411torbox-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            System.IO.File.WriteAllText(probe, string.Empty);
+            System.IO.File.Delete(probe);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return "pas de droit d'écriture pour Jellyfin (" + ex.Message + ")";
+        }
+    }
 
     /// <summary>Teste Prowlarr et renvoie la liste de ses indexeurs (pour choisir C411).</summary>
     [HttpGet("Test/Prowlarr")]

@@ -45,6 +45,25 @@ public class PluginConfiguration : BasePluginConfiguration
 
     public string TorboxApiKey { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Télécharge les torrents terminés sur Torbox vers le NAS et les range dans la bibliothèque
+    /// (remplace l'application « RealDebrid » + Radarr / Sonarr). Désactivé par défaut pour ne pas
+    /// doublonner une récupération déjà en place.
+    /// </summary>
+    public bool AutoImportEnabled { get; set; }
+
+    /// <summary>Dossier des films (vide : premier dossier de la bibliothèque Jellyfin de type Films).</summary>
+    public string MoviesPath { get; set; } = string.Empty;
+
+    /// <summary>Dossier des séries (vide : premier dossier de la bibliothèque Jellyfin de type Séries).</summary>
+    public string SeriesPath { get; set; } = string.Empty;
+
+    /// <summary>Supprime le torrent de Torbox une fois les fichiers rangés (libère un emplacement Torbox).</summary>
+    public bool DeleteFromTorboxAfterImport { get; set; }
+
+    /// <summary>Copie aussi les sous-titres présents dans le torrent.</summary>
+    public bool ImportSubtitles { get; set; } = true;
+
     /// <summary>Auto-validation si le torrent est déjà en cache sur Torbox (quelle que soit la taille).</summary>
     public bool AutoApproveWhenCached { get; set; } = true;
 
