@@ -19,9 +19,9 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "Jellyfin.Model"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      # Doit rester identique à la version embarquée par Jellyfin 12.2 (DLL non copiée avec le plugin).
+      # Doit rester EXACTEMENT la version embarquée par Jellyfin 12.2 (DLL non copiée avec le plugin) :
+      # la version d'assembly inclut le patch, une montée même en patch casse le chargement.
       - dependency-name: "Microsoft.Data.Sqlite"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       tests:
         patterns:
