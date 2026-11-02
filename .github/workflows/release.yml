@@ -1,0 +1,44 @@
+# Génère le plugin à chaque release GitHub publiée et attache l'archive à la release.
+# Version du plugin = tag de la release (v1.2.3 → 1.2.3.0).
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag d'une release existante à (re)générer, ex. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Tests et paquet
+        shell: pwsh
+        run: ./scripts/package.ps1 -Version "$env:TAG"
+
+      - name: Somme de contrôle
+        run: |
+          cd artifacts
+          for f in c411-torbox_*.zip; do sha256sum "$f" > "$f.sha256"; done
+          ls -l
+
+      - name: Ajout à la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" artifacts/c411-torbox_*.zip artifacts/c411-torbox_*.zip.sha256 --clobber --repo "$GITHUB_REPOSITORY"

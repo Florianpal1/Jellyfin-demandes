@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Jellyfin.Plugin.C411Torbox/Jellyfin.Plugin.C411Torbox.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Jellyfin.Plugin.C411Torbox.Tests/Jellyfin.Plugin.C411Torbox.Tests.csproj" />
+  </Folder>
+</Solution>
