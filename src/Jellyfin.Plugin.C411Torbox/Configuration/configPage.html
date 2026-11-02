@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <title>C411 Torbox</title>
+</head>
+<body>
+    <div id="C411TorboxConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="C411TorboxConfigForm">
+                    <div class="verticalSection">
+                        <h2 class="sectionTitle">C411 Torbox</h2>
+                        <p>Page des demandes pour les utilisateurs :
+                            <a id="c411UiLink" is="emby-linkbutton" class="button-link" target="_blank" rel="noopener">ouvrir</a>
+                            (lien à partager aux utilisateurs).</p>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h3 class="sectionTitle">Prowlarr (indexeur C411)</h3>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="ProwlarrUrl">URL de Prowlarr</label>
+                            <input id="ProwlarrUrl" type="url" is="emby-input" placeholder="http://prowlarr:9696" />
+                            <div class="fieldDescription">Adresse de Prowlarr telle que vue depuis le serveur Jellyfin.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="ProwlarrApiKey">Clé API Prowlarr</label>
+                            <input id="ProwlarrApiKey" type="password" is="emby-input" autocomplete="off" />
+                            <div class="fieldDescription">Prowlarr &gt; Settings &gt; General &gt; API Key.</div>
+                        </div>
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="ProwlarrIndexerId">Indexeur C411</label>
+                            <select is="emby-select" id="ProwlarrIndexerId" class="emby-select-withcolor emby-select">
+                                <option value="0">— Testez la connexion pour charger la liste —</option>
+                            </select>
+                        </div>
+                        <button is="emby-button" type="button" id="btnTestProwlarr" class="raised emby-button"><span>Enregistrer et tester Prowlarr</span></button>
+                        <div id="prowlarrResult" class="fieldDescription"></div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="MovieCategories">Catégories films</label>
+                            <input id="MovieCategories" type="text" is="emby-input" />
+                            <div class="fieldDescription">Identifiants Newznab séparés par des virgules (2000 = films).</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="TvCategories">Catégories séries</label>
+                            <input id="TvCategories" type="text" is="emby-input" />
+                            <div class="fieldDescription">Identifiants Newznab séparés par des virgules (5000 = séries TV).</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="HashLookupLimit">Limite de calcul des hash</label>
+                            <input id="HashLookupLimit" type="number" min="0" max="100" is="emby-input" />
+                            <div class="fieldDescription">Si Prowlarr ne fournit pas l'infohash, le .torrent des N résultats les plus seedés est téléchargé pour vérifier le cache Torbox. Chaque téléchargement peut compter sur C411.</div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h3 class="sectionTitle">Torbox</h3>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="TorboxApiKey">Clé API Torbox</label>
+                            <input id="TorboxApiKey" type="password" is="emby-input" autocomplete="off" />
+                            <div class="fieldDescription">torbox.app &gt; Settings &gt; API Key.</div>
+                        </div>
+                        <button is="emby-button" type="button" id="btnTestTorbox" class="raised emby-button"><span>Enregistrer et tester Torbox</span></button>
+                        <div id="torboxResult" class="fieldDescription"></div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h3 class="sectionTitle">Validation automatique</h3>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="AutoApproveWhenCached" type="checkbox" is="emby-checkbox" />
+                                <span>Valider automatiquement si le torrent est déjà en cache Torbox</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">Quelle que soit sa taille.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="MovieMaxSizeGb">Taille max d'un film (Go)</label>
+                            <input id="MovieMaxSizeGb" type="number" min="0" step="0.1" is="emby-input" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="EpisodeMaxSizeGb">Taille max d'un épisode (Go)</label>
+                            <input id="EpisodeMaxSizeGb" type="number" min="0" step="0.1" is="emby-input" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SeasonMaxSizeGb">Taille max d'un pack de saison (Go)</label>
+                            <input id="SeasonMaxSizeGb" type="number" min="0" step="0.1" is="emby-input" />
+                            <div class="fieldDescription">0 = jamais de validation automatique par la taille pour ce type.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="MinSeedersForAutoApproval">Seeders minimum</label>
+                            <input id="MinSeedersForAutoApproval" type="number" min="0" is="emby-input" />
+                            <div class="fieldDescription">En dessous, la demande part en validation admin même si elle est sous le seuil de taille.</div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h3 class="sectionTitle">Notifications</h3>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="DiscordWebhookUrl">Webhook Discord (facultatif)</label>
+                            <input id="DiscordWebhookUrl" type="url" is="emby-input" placeholder="https://discord.com/api/webhooks/…" />
+                            <div class="fieldDescription">Les notifications sont toujours visibles dans la page des demandes ; le webhook les envoie en plus sur Discord.</div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button"><span>Enregistrer</span></button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <script type="text/javascript">
+            (function () {
+                var pluginId = 'a1beec8b-cc16-4382-96ca-8d4cdbfd032c';
+                var page = document.querySelector('#C411TorboxConfigPage');
+                var textFields = ['ProwlarrUrl', 'ProwlarrApiKey', 'MovieCategories', 'TvCategories', 'TorboxApiKey', 'DiscordWebhookUrl'];
+                var numberFields = ['HashLookupLimit', 'MovieMaxSizeGb', 'EpisodeMaxSizeGb', 'SeasonMaxSizeGb', 'MinSeedersForAutoApproval'];
+                var savedIndexerId = 0;
+
+                function q(id) { return page.querySelector('#' + id); }
+
+                function setIndexerOptions(indexers) {
+                    var select = q('ProwlarrIndexerId');
+                    select.innerHTML = '';
+                    var none = document.createElement('option');
+                    none.value = '0';
+                    none.textContent = '— Choisir l\'indexeur C411 —';
+                    select.appendChild(none);
+                    indexers.forEach(function (i) {
+                        var opt = document.createElement('option');
+                        opt.value = String(i.id);
+                        opt.textContent = i.name + (i.enabled ? '' : ' (désactivé)');
+                        select.appendChild(opt);
+                    });
+                    if (savedIndexerId && !indexers.some(function (i) { return i.id === savedIndexerId; })) {
+                        var keep = document.createElement('option');
+                        keep.value = String(savedIndexerId);
+                        keep.textContent = 'Indexeur #' + savedIndexerId;
+                        select.appendChild(keep);
+                    }
+                    select.value = String(savedIndexerId || 0);
+                }
+
+                function load() {
+                    Dashboard.showLoadingMsg();
+                    q('c411UiLink').href = ApiClient.getUrl('C411Torbox/ui');
+                    q('c411UiLink').textContent = ApiClient.getUrl('C411Torbox/ui');
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        textFields.forEach(function (f) { q(f).value = config[f] || ''; });
+                        numberFields.forEach(function (f) { q(f).value = config[f]; });
+                        q('AutoApproveWhenCached').checked = !!config.AutoApproveWhenCached;
+                        savedIndexerId = config.ProwlarrIndexerId || 0;
+                        setIndexerOptions([]);
+                        Dashboard.hideLoadingMsg();
+                    });
+                }
+
+                function save() {
+                    return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        textFields.forEach(function (f) { config[f] = q(f).value.trim(); });
+                        numberFields.forEach(function (f) { config[f] = parseFloat(q(f).value) || 0; });
+                        config.HashLookupLimit = Math.round(config.HashLookupLimit);
+                        config.MinSeedersForAutoApproval = Math.round(config.MinSeedersForAutoApproval);
+                        config.AutoApproveWhenCached = q('AutoApproveWhenCached').checked;
+                        config.ProwlarrIndexerId = parseInt(q('ProwlarrIndexerId').value, 10) || 0;
+                        savedIndexerId = config.ProwlarrIndexerId;
+                        return ApiClient.updatePluginConfiguration(pluginId, config);
+                    });
+                }
+
+                function test(path, resultId, onSuccess) {
+                    var out = q(resultId);
+                    out.textContent = 'Test en cours…';
+                    save().then(function () {
+                        return ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl(path), dataType: 'json' });
+                    }).then(function (res) {
+                        out.textContent = (res.success ? '✔ ' : '✖ ') + res.message;
+                        if (res.success && onSuccess) { onSuccess(res); }
+                    }).catch(function () {
+                        out.textContent = '✖ Le test a échoué (voir les journaux du serveur).';
+                    });
+                }
+
+                page.addEventListener('pageshow', load);
+
+                q('btnTestProwlarr').addEventListener('click', function () {
+                    test('C411Torbox/Admin/Test/Prowlarr', 'prowlarrResult', function (res) {
+                        setIndexerOptions(res.indexers || []);
+                        if (!savedIndexerId) {
+                            var c411 = (res.indexers || []).find(function (i) { return /c411/i.test(i.name); });
+                            if (c411) { q('ProwlarrIndexerId').value = String(c411.id); }
+                        }
+                    });
+                });
+
+                q('btnTestTorbox').addEventListener('click', function () {
+                    test('C411Torbox/Admin/Test/Torbox', 'torboxResult');
+                });
+
+                page.querySelector('#C411TorboxConfigForm').addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    Dashboard.showLoadingMsg();
+                    save().then(function (result) {
+                        Dashboard.processPluginConfigurationUpdateResult(result);
+                    });
+                    return false;
+                });
+            })();
+        </script>
+    </div>
+</body>
+</html>

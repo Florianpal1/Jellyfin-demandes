@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <title>Demandes C411</title>
+</head>
+<body>
+    <div id="C411TorboxRequestsPage" data-role="page" class="page type-interior pluginConfigurationPage">
+        <div data-role="content">
+            <div class="content-primary">
+                <!-- La page autonome (onglet Administration) est intégrée telle quelle dans le tableau de bord. -->
+                <iframe id="c411Frame" title="Demandes C411" style="width:100%;height:calc(100vh - 140px);border:0;border-radius:8px;background:#101010;"></iframe>
+            </div>
+        </div>
+        <script type="text/javascript">
+            (function () {
+                var page = document.querySelector('#C411TorboxRequestsPage');
+                page.addEventListener('pageshow', function () {
+                    page.querySelector('#c411Frame').src = ApiClient.getUrl('C411Torbox/ui') + '#admin';
+                });
+            })();
+        </script>
+    </div>
+</body>
+</html>

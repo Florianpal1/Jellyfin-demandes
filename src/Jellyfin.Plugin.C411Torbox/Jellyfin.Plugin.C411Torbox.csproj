@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.C411Torbox</RootNamespace>
+    <AssemblyName>Jellyfin.Plugin.C411Torbox</AssemblyName>
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- Fournis par le serveur Jellyfin 12.2 : jamais copiés dans le dossier du plugin. -->
+  <ItemGroup>
+    <PackageReference Include="Jellyfin.Controller" Version="12.2.0">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Jellyfin.Model" Version="12.2.0">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <!-- Même version que celle embarquée par Jellyfin 12.2 (Directory.Packages.props). -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11">
+      <ExcludeAssets>runtime;native</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Jellyfin.Plugin.C411Torbox.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Configuration\*.html;Web\*" />
+    <EmbeddedResource Include="Configuration\*.html" />
+    <EmbeddedResource Include="Web\*" />
+  </ItemGroup>
+
+</Project>

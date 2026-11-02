@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Demandes C411</title>
+    <link rel="stylesheet" href="ui/app.css">
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">🎬 Demandes C411</div>
+        <nav id="tabs" class="tabs" hidden>
+            <button data-tab="search" class="tab active">Rechercher</button>
+            <button data-tab="mine" class="tab">Mes demandes</button>
+            <button data-tab="notifications" class="tab">Notifications <span id="notifBadge" class="badge" hidden></span></button>
+            <button data-tab="admin" class="tab" id="adminTab" hidden>Administration <span id="pendingBadge" class="badge" hidden></span></button>
+        </nav>
+        <div class="user"><span id="userName"></span> <a id="backLink" href="#">Retour à Jellyfin</a></div>
+    </header>
+
+    <main>
+        <section id="login" class="panel narrow" hidden>
+            <h1>Connexion</h1>
+            <p class="muted">Connectez-vous avec votre compte Jellyfin.</p>
+            <form id="loginForm">
+                <label>Nom d'utilisateur <input id="loginUser" autocomplete="username" required></label>
+                <label>Mot de passe <input id="loginPw" type="password" autocomplete="current-password"></label>
+                <button type="submit" class="primary">Se connecter</button>
+                <p id="loginError" class="error" hidden></p>
+            </form>
+        </section>
+
+        <section id="view-search" class="view" hidden>
+            <form id="mediaForm" class="searchbar">
+                <select id="mediaKind" aria-label="Type">
+                    <option value="Movie">Film</option>
+                    <option value="Series">Série</option>
+                </select>
+                <input id="mediaQuery" type="search" placeholder="Titre du film ou de la série…" required maxlength="200" aria-label="Titre">
+                <button type="submit" class="primary">Rechercher</button>
+            </form>
+            <div id="mediaResults" class="cards"></div>
+
+            <div id="mediaDetail" class="panel" hidden>
+                <div class="detail-head">
+                    <img id="detailPoster" alt="" hidden>
+                    <div>
+                        <h2 id="detailTitle"></h2>
+                        <p id="detailOverview" class="muted"></p>
+                        <form id="torrentForm" class="inline-form">
+                            <span id="seriesFields" hidden>
+                                <label>Saison <input id="seasonInput" type="number" min="0" max="200" value="1"></label>
+                                <label class="check"><input id="episodeToggle" type="checkbox"> Épisode précis</label>
+                                <label id="episodeLabel" hidden>Épisode <input id="episodeInput" type="number" min="1" max="2000" value="1"></label>
+                            </span>
+                            <button type="submit" class="primary">Chercher les torrents</button>
+                            <button type="button" id="detailClose" class="ghost">Fermer</button>
+                        </form>
+                    </div>
+                </div>
+                <div id="torrentInfo"></div>
+                <div class="table-wrap">
+                    <table id="torrentTable" hidden>
+                        <thead>
+                            <tr><th>Torrent</th><th>Taille</th><th title="Seeders">Seed</th><th title="Leechers">Leech</th><th>Torbox</th><th>Validation</th><th></th></tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section id="view-mine" class="view" hidden>
+            <h1>Mes demandes</h1>
+            <div class="table-wrap">
+                <table id="mineTable">
+                    <thead><tr><th>Média</th><th>Torrent</th><th>Taille</th><th>Statut</th><th>Date</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="view-notifications" class="view" hidden>
+            <h1>Notifications</h1>
+            <ul id="notifList" class="notifs"></ul>
+        </section>
+
+        <section id="view-admin" class="view" hidden>
+            <h1>Administration des demandes</h1>
+            <div class="inline-form">
+                <label>Statut
+                    <select id="adminFilter">
+                        <option value="Pending">En attente</option>
+                        <option value="Failed">En échec</option>
+                        <option value="">Toutes</option>
+                    </select>
+                </label>
+                <button id="adminRefresh" class="ghost" type="button">Actualiser</button>
+            </div>
+            <div class="table-wrap">
+                <table id="adminTable">
+                    <thead><tr><th>Média</th><th>Demandeur</th><th>Torrent</th><th>Taille</th><th>Seed</th><th>Torbox</th><th>Statut</th><th>Date</th><th></th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="ui/app.js"></script>
+</body>
+</html>
