@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Net.Http;
+using System.Linq;
 using System.Net.Security;
 using Jellyfin.Plugin.C411Torbox.Data;
 using Jellyfin.Plugin.C411Torbox.Services;
@@ -8,6 +9,7 @@ using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Plugins;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.C411Torbox;
 
@@ -21,13 +23,32 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
             .ConfigurePrimaryHttpMessageHandler(sp =>
             {
                 var config = sp.GetRequiredService<IConfigProvider>();
+                var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("C411Torbox.Prowlarr");
                 return new HttpClientHandler
                 {
                     AllowAutoRedirect = false,
 
                     // Option lue à chaque connexion : la cocher/décocher s'applique sans redémarrage.
-                    ServerCertificateCustomValidationCallback = (_, _, _, errors)
-                        => errors == SslPolicyErrors.None || config.Current.ProwlarrIgnoreCertificateErrors,
+                    ServerCertificateCustomValidationCallback = (request, cert, chain, errors) =>
+                    {
+                        if (errors == SslPolicyErrors.None)
+                        {
+                            return true;
+                        }
+
+                        // Diagnostic : raison exacte du refus (autorité inconnue du système, chaîne incomplète, nom…).
+                        var details = chain is null
+                            ? string.Empty
+                            : string.Join(" ; ", chain.ChainStatus.Select(s => s.Status + " : " + s.StatusInformation.Trim()));
+                        logger.LogWarning(
+                            "Certificat HTTPS refusé pour {Host} : {Errors}. Sujet : {Subject}. Émetteur : {Issuer}. Chaîne : {Chain}",
+                            request.RequestUri?.Host,
+                            errors,
+                            cert?.Subject,
+                            cert?.Issuer,
+                            details);
+                        return config.Current.ProwlarrIgnoreCertificateErrors;
+                    },
                 };
             });
         serviceCollection.AddHttpClient(TorboxClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(60));

@@ -33,7 +33,7 @@
                                 <input id="ProwlarrIgnoreCertificateErrors" type="checkbox" is="emby-checkbox" />
                                 <span>Accepter un certificat auto-signé</span>
                             </label>
-                            <div class="fieldDescription checkboxFieldDescription">Uniquement si Prowlarr est en https:// avec un certificat auto-signé sur le réseau local. Sinon, préférez une adresse en http://.</div>
+                            <div class="fieldDescription checkboxFieldDescription">Uniquement pour un Prowlarr du réseau local avec un certificat auto-signé. À ne pas utiliser pour un Prowlarr accessible par Internet : la clé API pourrait être interceptée. La raison exacte d'un refus de certificat est écrite dans les journaux Jellyfin.</div>
                         </div>
                         <div class="selectContainer">
                             <label class="selectLabel" for="ProwlarrIndexerId">Indexeur C411</label>
