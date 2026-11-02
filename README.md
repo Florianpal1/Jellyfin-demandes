@@ -95,4 +95,4 @@ dotnet test
 - `src/Jellyfin.Plugin.C411Torbox` : le plugin (API, services, pages web embarquées).
 - `tests/Jellyfin.Plugin.C411Torbox.Tests` : tests unitaires et scénarios complets (SQLite réel, C411/Prowlarr/Torbox simulés).
 
-Les packages `Jellyfin.Controller` / `Jellyfin.Model` sont épinglés en **12.2.0** et `Microsoft.Data.Sqlite` reste en **10.0.x** (série embarquée par Jellyfin 12.2 ; Dependabot ne propose que les correctifs de ces trois packages). Ces assemblies ne sont pas copiées avec le plugin : elles sont fournies par le serveur.
+Les packages `Jellyfin.Controller` / `Jellyfin.Model` sont épinglés en **12.2.0** et `Microsoft.Data.Sqlite` en **10.0.11** exactement (version embarquée par Jellyfin 12.2, patch compris ; Dependabot ne propose que les correctifs de `Jellyfin.Controller` / `Jellyfin.Model` et ignore Sqlite). Ces assemblies ne sont pas copiées avec le plugin : elles sont fournies par le serveur.
