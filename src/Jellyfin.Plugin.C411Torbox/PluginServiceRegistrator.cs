@@ -23,6 +23,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
             .ConfigurePrimaryHttpMessageHandler(sp =>
             {
                 var config = sp.GetRequiredService<IConfigProvider>();
+                var diagnostics = sp.GetRequiredService<CertificateDiagnostics>();
                 var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("C411Torbox.Prowlarr");
                 return new HttpClientHandler
                 {
@@ -40,9 +41,12 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
                         var details = chain is null
                             ? string.Empty
                             : string.Join(" ; ", chain.ChainStatus.Select(s => s.Status + " : " + s.StatusInformation.Trim()));
+                        var reason = CertificateDiagnostics.Explain(errors, chain?.ChainStatus.Select(s => s.Status) ?? []);
+                        diagnostics.Record(request.RequestUri?.Host, reason + (cert is null ? string.Empty : " [émetteur : " + cert.Issuer + "]"));
                         logger.LogWarning(
-                            "Certificat HTTPS refusé pour {Host} : {Errors}. Sujet : {Subject}. Émetteur : {Issuer}. Chaîne : {Chain}",
+                            "Certificat HTTPS refusé pour {Host} : {Reason}. Erreurs : {Errors}. Sujet : {Subject}. Émetteur : {Issuer}. Chaîne : {Chain}",
                             request.RequestUri?.Host,
+                            reason,
                             errors,
                             cert?.Subject,
                             cert?.Issuer,
@@ -55,6 +59,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddHttpClient(NotificationService.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(10));
 
         serviceCollection.AddSingleton<IConfigProvider, PluginConfigProvider>();
+        serviceCollection.AddSingleton<CertificateDiagnostics>();
         serviceCollection.AddSingleton(sp =>
         {
             var paths = sp.GetRequiredService<IApplicationPaths>();
