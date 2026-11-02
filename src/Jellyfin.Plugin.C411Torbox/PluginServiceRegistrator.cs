@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net.Security;
 using Jellyfin.Plugin.C411Torbox.Data;
 using Jellyfin.Plugin.C411Torbox.Services;
+using Jellyfin.Plugin.C411Torbox.Services.Import;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Plugins;
@@ -62,6 +63,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddHttpClient(TorboxClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(60));
         serviceCollection.AddHttpClient(NotificationService.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(10));
 
+        // Fichiers de plusieurs Go : pas de délai global, l'arrêt passe par le jeton d'annulation.
+        serviceCollection.AddHttpClient(FileDownloader.HttpClientName, c => c.Timeout = System.Threading.Timeout.InfiniteTimeSpan);
+
         serviceCollection.AddSingleton<IConfigProvider, PluginConfigProvider>();
         serviceCollection.AddSingleton<CertificateDiagnostics>();
         serviceCollection.AddSingleton(sp =>
@@ -80,6 +84,13 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<INotificationService, NotificationService>();
         serviceCollection.AddSingleton<RequestService>();
         serviceCollection.AddHostedService<LibraryWatcher>();
+
+        // Import automatique (téléchargement Torbox → NAS et rangement façon Radarr / Sonarr).
+        serviceCollection.AddSingleton<FileDownloader>();
+        serviceCollection.AddSingleton<IEpisodeTitleProvider, EpisodeTitleProvider>();
+        serviceCollection.AddSingleton<ILibraryRefresher, LibraryRefresher>();
+        serviceCollection.AddSingleton<ImportService>();
+        serviceCollection.AddHostedService<ImportWorker>();
 
         // TorboxStatusTask (IScheduledTask) est découverte automatiquement par Jellyfin.
     }

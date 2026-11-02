@@ -35,7 +35,8 @@
 9. **Suivi** : statut Torbox lu périodiquement ; quand le média apparaît dans la bibliothèque Jellyfin, la demande passe à « Disponible » et l'utilisateur est notifié.
 
 ### Hors périmètre
-- Le téléchargement est fait par **Torbox** ; la récupération des fichiers terminés et leur rangement dans la bibliothèque sont faits par l'application **« RealDebrid »** existante. Le plugin ne gère ni file d'attente Torbox, ni suppression, ni rangement : il **envoie le torrent à Torbox, c'est tout**.
+- ~~Le téléchargement est fait par **Torbox** ; la récupération des fichiers terminés et leur rangement dans la bibliothèque sont faits par l'application **« RealDebrid »** existante.~~ Révisé le 2026-11-03 (v0.3.0) : voir § 7, le plugin peut désormais télécharger et ranger lui-même.
+- Toujours hors périmètre : suivi automatique des séries (nouveaux épisodes à leur sortie), remplacement par une meilleure qualité, torrents ajoutés à Torbox en dehors du plugin.
 
 ---
 
@@ -261,3 +262,27 @@ Version **0.1.0** écrite : étapes 1 à 12 implémentées, compilées contre Je
 5. Affichage de la page admin dans le tableau de bord (iframe : peut être bloqué si un reverse proxy envoie `X-Frame-Options: DENY`).
 
 Prochaine étape : installer sur le serveur (`scripts/package.ps1`), configurer, et faire un premier test avec un petit torrent.
+
+## 7. Téléchargement et rangement automatiques (v0.3.0, 2026-11-03)
+
+Objectif : remplacer l'application « RealDebrid » + Radarr / Sonarr par le plugin, pour les demandes faites dans le plugin.
+
+Décisions (réponses du 2026-11-03) :
+- Fichiers **téléchargés sur le NAS** (pas de `.strm`) depuis les liens directs Torbox (`torrents/requestdl`).
+- **Demandes uniquement** : pas de suivi des séries ni de remplacement de qualité.
+- Seuls les torrents des demandes du plugin sont rangés ; le média est connu par la fiche TMDB de la demande (pas de devinette sur le nom du torrent).
+- Nommage **standard Radarr / Sonarr**, avec `[tmdbid-…]` dans le nom de dossier.
+
+Fonctionnement :
+- Nouveaux statuts : `Importing` (téléchargement vers le NAS, avec progression), `Imported` (rangé, en attente du scan Jellyfin), `ImportFailed` (raison + bouton « Relancer »). `Imported` → `Available` par la détection existante.
+- `ImportWorker` (tâche de fond) : toutes les 30 s, traite la plus ancienne demande `CompletedOnTorbox` ; consulte Torbox toutes les 2 min tant qu'une demande y est en cours. Au démarrage, un import interrompu repart (reprise HTTP `Range` du fichier `.c411part`).
+- `ImportPlanner` (logique pure, testée) choisit les fichiers et calcule les noms ; `ReleaseParser` lit SxxEyy / 1x02 / qualité / langue des sous-titres.
+- Série déjà dans Jellyfin : rangement dans son dossier existant (et dossier de saison existant).
+- Garde-fous : option désactivée par défaut (pour ne pas doublonner l'application « RealDebrid »), espace disque vérifié, destinations confinées au dossier du média, seuls vidéos et sous-titres copiés.
+- Schéma SQLite v2 : colonnes `ImportProgress`, `ImportedPath` (migration automatique depuis la v1).
+
+**Non vérifié à ce stade** (nécessite le serveur réel) :
+1. Réponse réelle de `torrents/mylist?id=…` (liste `files` avec `id`, `name`, `size`) et de `torrents/requestdl`.
+2. Reprise `Range` sur les liens CDN de Torbox (sans reprise, le fichier repart de zéro, ce qui reste correct).
+3. Scan ciblé déclenché par `ILibraryMonitor.ReportFileSystemChanged` sur le QNAP (sinon, le scan planifié de Jellyfin trouve les fichiers).
+4. Titres d'épisodes via le fournisseur TMDB de Jellyfin.

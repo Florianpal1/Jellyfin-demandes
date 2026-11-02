@@ -38,6 +38,15 @@ public enum RequestStatus
 
     CompletedOnTorbox,
 
+    /// <summary>Téléchargement des fichiers de Torbox vers le NAS en cours.</summary>
+    Importing,
+
+    /// <summary>Fichiers téléchargés et rangés dans la bibliothèque, en attente du scan Jellyfin.</summary>
+    Imported,
+
+    /// <summary>Le téléchargement ou le rangement a échoué (relance possible par un admin).</summary>
+    ImportFailed,
+
     /// <summary>Le média est apparu dans la bibliothèque Jellyfin.</summary>
     Available,
 

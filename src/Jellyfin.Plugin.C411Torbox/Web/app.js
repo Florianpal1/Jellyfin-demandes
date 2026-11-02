@@ -19,6 +19,9 @@
         SentToTorbox: 'Envoyée à Torbox',
         DownloadingOnTorbox: 'Téléchargement Torbox',
         CompletedOnTorbox: 'Terminé sur Torbox',
+        Importing: 'Téléchargement vers le NAS',
+        Imported: 'Rangé, arrive dans Jellyfin',
+        ImportFailed: 'Échec du rangement',
         Available: 'Disponible',
         Failed: 'Échec'
     };
@@ -86,12 +89,14 @@
     function statusPill(r) {
         const pill = el('span', { class: 'pill st-' + r.status }, STATUS_LABELS[r.status] || r.status);
         const wrap = el('div', null, pill);
-        if (r.status === 'DownloadingOnTorbox' && typeof r.torboxProgress === 'number') {
-            wrap.append(el('div', { class: 'progress', title: Math.round(r.torboxProgress * 100) + ' %' },
-                el('div', { style: `width:${Math.round(r.torboxProgress * 100)}%` })));
+        const progress = r.status === 'DownloadingOnTorbox' ? r.torboxProgress
+            : r.status === 'Importing' ? r.importProgress : null;
+        if (typeof progress === 'number') {
+            wrap.append(el('div', { class: 'progress', title: Math.round(progress * 100) + ' %' },
+                el('div', { style: `width:${Math.round(progress * 100)}%` })));
         }
         if (r.status === 'Rejected' && r.rejectReason) wrap.append(el('div', { class: 'muted' }, 'Motif : ' + r.rejectReason));
-        if (r.status === 'Failed' && r.lastError) wrap.append(el('div', { class: 'muted' }, r.lastError));
+        if ((r.status === 'Failed' || r.status === 'ImportFailed') && r.lastError) wrap.append(el('div', { class: 'muted' }, r.lastError));
         if (r.autoApprovalReason === 'Cached') wrap.append(el('div', { class: 'muted' }, 'auto : déjà en cache Torbox'));
         if (r.autoApprovalReason === 'Size') wrap.append(el('div', { class: 'muted' }, 'auto : sous le seuil'));
         return wrap;
@@ -378,6 +383,9 @@
                         el('button', { class: 'ok', type: 'button', onclick: (e) => adminAction(r, 'Approve', e.target) },
                             r.status === 'Failed' ? 'Renvoyer' : 'Valider'), ' ',
                         el('button', { class: 'bad', type: 'button', onclick: (e) => adminAction(r, 'Reject', e.target) }, 'Refuser'));
+                } else if (r.status === 'ImportFailed') {
+                    actions.append(
+                        el('button', { class: 'ok', type: 'button', title: 'Retélécharger depuis Torbox et ranger', onclick: (e) => adminAction(r, 'RetryImport', e.target) }, 'Relancer'));
                 }
                 tbody.append(el('tr', { class: r.wasCachedOnTorbox ? 'cached' : null },
                     el('td', null, describe(r)),
@@ -408,6 +416,7 @@
             const updated = await api('POST', `C411Torbox/Admin/Requests/${r.id}/${action}`, body);
             toast(action === 'Reject'
                 ? 'Demande refusée.'
+                : action === 'RetryImport' ? 'Rangement relancé : le téléchargement vers le NAS va reprendre.'
                 : updated.status === 'Failed' ? 'Échec de l\'envoi à Torbox : ' + (updated.lastError || '') : 'Demande validée et envoyée à Torbox.',
                 updated.status === 'Failed');
         } catch (e) {
