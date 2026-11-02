@@ -202,7 +202,7 @@ public class TorrentSearchService
 
         if (lastError is not null)
         {
-            throw new HttpRequestException("Prowlarr ne répond pas correctement : " + lastError.Message, lastError);
+            throw new HttpRequestException(lastError.Message, lastError);
         }
 
         return new List<TorrentResult>();

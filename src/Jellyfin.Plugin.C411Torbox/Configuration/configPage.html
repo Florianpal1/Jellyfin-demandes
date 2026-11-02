@@ -28,6 +28,13 @@
                             <input id="ProwlarrApiKey" type="password" is="emby-input" autocomplete="off" />
                             <div class="fieldDescription">Prowlarr &gt; Settings &gt; General &gt; API Key.</div>
                         </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="ProwlarrIgnoreCertificateErrors" type="checkbox" is="emby-checkbox" />
+                                <span>Accepter un certificat auto-signé</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">Uniquement pour un Prowlarr du réseau local avec un certificat auto-signé. À ne pas utiliser pour un Prowlarr accessible par Internet : la clé API pourrait être interceptée. La raison exacte d'un refus de certificat est écrite dans les journaux Jellyfin.</div>
+                        </div>
                         <div class="selectContainer">
                             <label class="selectLabel" for="ProwlarrIndexerId">Indexeur C411</label>
                             <select is="emby-select" id="ProwlarrIndexerId" class="emby-select-withcolor emby-select">
@@ -148,6 +155,7 @@
                         textFields.forEach(function (f) { q(f).value = config[f] || ''; });
                         numberFields.forEach(function (f) { q(f).value = config[f]; });
                         q('AutoApproveWhenCached').checked = !!config.AutoApproveWhenCached;
+                        q('ProwlarrIgnoreCertificateErrors').checked = !!config.ProwlarrIgnoreCertificateErrors;
                         savedIndexerId = config.ProwlarrIndexerId || 0;
                         setIndexerOptions([]);
                         Dashboard.hideLoadingMsg();
@@ -161,6 +169,7 @@
                         config.HashLookupLimit = Math.round(config.HashLookupLimit);
                         config.MinSeedersForAutoApproval = Math.round(config.MinSeedersForAutoApproval);
                         config.AutoApproveWhenCached = q('AutoApproveWhenCached').checked;
+                        config.ProwlarrIgnoreCertificateErrors = q('ProwlarrIgnoreCertificateErrors').checked;
                         config.ProwlarrIndexerId = parseInt(q('ProwlarrIndexerId').value, 10) || 0;
                         savedIndexerId = config.ProwlarrIndexerId;
                         return ApiClient.updatePluginConfiguration(pluginId, config);
