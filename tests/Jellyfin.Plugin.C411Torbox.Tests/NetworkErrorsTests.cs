@@ -102,3 +102,23 @@ public class NetworkErrorsTests
         Assert.Contains("URL de Prowlarr invalide", ex.Message, StringComparison.Ordinal);
     }
 }
+
+public class CertificateContextTests
+{
+    [Fact]
+    public void DescribeContext_ListsCertificateNamesAndResolvedAddresses()
+    {
+        using var key = System.Security.Cryptography.RSA.Create(2048);
+        var req = new CertificateRequest("CN=autre-site.example", key, System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        var san = new SubjectAlternativeNameBuilder();
+        san.AddDnsName("autre-site.example");
+        san.AddDnsName("www.autre-site.example");
+        req.CertificateExtensions.Add(san.Build());
+        using var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+
+        var text = CertificateDiagnostics.DescribeContext("localhost", cert);
+
+        Assert.Contains("certificat reçu pour : autre-site.example, www.autre-site.example", text, StringComparison.Ordinal);
+        Assert.Contains("localhost résolu par le NAS en : ", text, StringComparison.Ordinal);
+    }
+}

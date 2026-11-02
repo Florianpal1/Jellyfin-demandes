@@ -26,6 +26,55 @@ public class CertificateDiagnostics
     public string? Get(string? host)
         => !string.IsNullOrEmpty(host) && _lastFailure.TryGetValue(host, out var reason) ? reason : null;
 
+    /// <summary>
+    /// Contexte utile au diagnostic : noms couverts par le certificat reçu, émetteur,
+    /// et adresses IP obtenues par le NAS pour l'hôte (pour repérer un DNS qui renvoie ailleurs).
+    /// </summary>
+    public static string DescribeContext(string? host, X509Certificate2? cert)
+    {
+        var parts = new List<string>();
+        if (cert is not null)
+        {
+            var names = CertificateNames(cert);
+            parts.Add("certificat reçu pour : " + (names.Count > 0 ? string.Join(", ", names) : cert.Subject));
+            parts.Add("émetteur : " + cert.Issuer);
+        }
+
+        if (!string.IsNullOrEmpty(host))
+        {
+            try
+            {
+                var ips = System.Net.Dns.GetHostAddresses(host);
+                parts.Add(host + " résolu par le NAS en : " + (ips.Length > 0 ? string.Join(", ", ips.Select(i => i.ToString())) : "aucune adresse"));
+            }
+            catch (System.Net.Sockets.SocketException ex)
+            {
+                parts.Add("résolution DNS de " + host + " impossible : " + ex.Message);
+            }
+        }
+
+        return parts.Count > 0 ? "[" + string.Join(" ; ", parts) + "]" : string.Empty;
+    }
+
+    internal static IReadOnlyList<string> CertificateNames(X509Certificate2 cert)
+    {
+        var names = cert.Extensions
+            .OfType<X509SubjectAlternativeNameExtension>()
+            .SelectMany(e => e.EnumerateDnsNames())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (names.Count == 0)
+        {
+            var cn = cert.GetNameInfo(X509NameType.DnsName, false);
+            if (!string.IsNullOrEmpty(cn))
+            {
+                names.Add(cn);
+            }
+        }
+
+        return names;
+    }
+
     /// <summary>Explication en français d'un refus de certificat.</summary>
     public static string Explain(SslPolicyErrors errors, IEnumerable<X509ChainStatusFlags> chainStatus)
     {

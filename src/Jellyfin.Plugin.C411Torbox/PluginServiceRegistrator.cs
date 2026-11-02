@@ -43,7 +43,8 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
                             ? string.Empty
                             : string.Join(" ; ", chain.ChainStatus.Select(s => s.Status + " : " + s.StatusInformation.Trim()));
                         var reason = CertificateDiagnostics.Explain(errors, chain?.ChainStatus.Select(s => s.Status) ?? []);
-                        diagnostics.Record(request.RequestUri?.Host, reason + (cert is null ? string.Empty : " [émetteur : " + cert.Issuer + "]"));
+                        var host = request.RequestUri?.Host;
+                        diagnostics.Record(host, reason + " " + CertificateDiagnostics.DescribeContext(host, cert));
                         logger.LogWarning(
                             "Certificat HTTPS refusé pour {Host} : {Reason}. Erreurs : {Errors}. Sujet : {Subject}. Émetteur : {Issuer}. Chaîne : {Chain}",
                             request.RequestUri?.Host,
