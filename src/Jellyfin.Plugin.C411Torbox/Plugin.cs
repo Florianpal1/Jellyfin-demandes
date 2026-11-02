@@ -33,12 +33,19 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public IEnumerable<PluginPageInfo> GetPages()
     {
         var ns = GetType().Namespace;
+
+        // Le client web ouvre, pour le bouton « Paramètres » du plugin, la PREMIÈRE page marquée
+        // EnableInMainMenu (findBestConfigurationPage) : la page de configuration doit donc être
+        // en premier ET dans le menu, sinon c'est la page des demandes qui s'ouvre.
         return
         [
             new PluginPageInfo
             {
                 Name = "C411Torbox",
+                DisplayName = "C411 Torbox",
                 EmbeddedResourcePath = ns + ".Configuration.configPage.html",
+                EnableInMainMenu = true,
+                MenuIcon = "settings",
             },
             new PluginPageInfo
             {
