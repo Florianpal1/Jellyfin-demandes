@@ -28,11 +28,13 @@ public class ProwlarrClient
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfigProvider _config;
+    private readonly CertificateDiagnostics? _certificates;
 
-    public ProwlarrClient(IHttpClientFactory httpClientFactory, IConfigProvider config)
+    public ProwlarrClient(IHttpClientFactory httpClientFactory, IConfigProvider config, CertificateDiagnostics? certificates = null)
     {
         _httpClientFactory = httpClientFactory;
         _config = config;
+        _certificates = certificates;
     }
 
     public async Task<IReadOnlyList<ProwlarrIndexerInfo>> GetIndexersAsync(CancellationToken ct)
@@ -172,7 +174,7 @@ public class ProwlarrClient
     private static bool IsRedirect(HttpStatusCode code) => (int)code is >= 300 and < 400;
 
     /// <summary>Envoie la requête en remplaçant les erreurs réseau par un message lisible.</summary>
-    private static async Task<HttpResponseMessage> SendAsync(HttpClient client, HttpRequestMessage request, HttpCompletionOption option, CancellationToken ct)
+    private async Task<HttpResponseMessage> SendAsync(HttpClient client, HttpRequestMessage request, HttpCompletionOption option, CancellationToken ct)
     {
         try
         {
@@ -180,11 +182,11 @@ public class ProwlarrClient
         }
         catch (HttpRequestException ex)
         {
-            throw new HttpRequestException("Prowlarr injoignable : " + NetworkErrors.Describe(ex), ex);
+            throw new HttpRequestException("Prowlarr injoignable : " + NetworkErrors.Describe(ex, _certificates?.Get(request.RequestUri?.Host)), ex);
         }
         catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
         {
-            throw new HttpRequestException("Prowlarr injoignable : " + NetworkErrors.Describe(ex), ex);
+            throw new HttpRequestException("Prowlarr injoignable : " + NetworkErrors.Describe(ex, _certificates?.Get(request.RequestUri?.Host)), ex);
         }
     }
 

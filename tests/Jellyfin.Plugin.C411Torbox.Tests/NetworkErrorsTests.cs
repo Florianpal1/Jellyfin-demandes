@@ -1,5 +1,7 @@
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Security.Authentication;
 using Jellyfin.Plugin.C411Torbox.Services;
 
@@ -8,7 +10,7 @@ namespace Jellyfin.Plugin.C411Torbox.Tests;
 public class NetworkErrorsTests
 {
     [Fact]
-    public void SslError_ExplainsHowToFix()
+    public void SslError_WithoutDiagnostic_PointsToLogs()
     {
         var ex = new HttpRequestException(
             "The SSL connection could not be established, see inner exception.",
@@ -16,9 +18,39 @@ public class NetworkErrorsTests
 
         var message = NetworkErrors.Describe(ex);
 
-        Assert.Contains("certificat non valide", message, StringComparison.Ordinal);
         Assert.Contains("UntrustedRoot", message, StringComparison.Ordinal);
-        Assert.Contains("http://", message, StringComparison.Ordinal);
+        Assert.Contains("journaux Jellyfin", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SslError_WithDiagnostic_GivesTheReason()
+    {
+        var ex = new HttpRequestException("ssl", new AuthenticationException("rejected by the provided RemoteCertificateValidationCallback"));
+
+        var message = NetworkErrors.Describe(ex, "chaîne incomplète");
+
+        Assert.Equal("certificat HTTPS refusé par le NAS : chaîne incomplète.", message);
+    }
+
+    [Theory]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors, X509ChainStatusFlags.PartialChain, "chaîne incomplète")]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors, X509ChainStatusFlags.UntrustedRoot, "autorité racine inconnue du NAS")]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors, X509ChainStatusFlags.NotTimeValid, "certificat expiré")]
+    [InlineData(SslPolicyErrors.RemoteCertificateNameMismatch, X509ChainStatusFlags.NoError, "le nom de l'URL ne correspond pas")]
+    public void Explain_TranslatesCertificateProblems(SslPolicyErrors errors, X509ChainStatusFlags status, string expected)
+        => Assert.Contains(expected, CertificateDiagnostics.Explain(errors, [status]), StringComparison.Ordinal);
+
+    [Fact]
+    public async Task Prowlarr_ShowsRecordedCertificateReason()
+    {
+        var diagnostics = new CertificateDiagnostics();
+        diagnostics.Record("prowlarr", "chaîne incomplète");
+        var http = new FakeHttp((_, _) => throw new HttpRequestException("ssl", new AuthenticationException("rejected")));
+        var client = new ProwlarrClient(http, new FakeConfig(), diagnostics);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.GetIndexersAsync(CancellationToken.None));
+
+        Assert.Equal("Prowlarr injoignable : certificat HTTPS refusé par le NAS : chaîne incomplète.", ex.Message);
     }
 
     [Fact]
