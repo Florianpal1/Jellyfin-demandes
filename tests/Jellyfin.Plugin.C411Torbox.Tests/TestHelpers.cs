@@ -12,6 +12,9 @@ internal sealed class FakeConfig : IConfigProvider
         ProwlarrUrl = "http://prowlarr:9696",
         ProwlarrApiKey = "prowlarr-key",
         ProwlarrIndexerId = 7,
+        IndexerMode = IndexerMode.Prowlarr,
+        TorznabUrl = "https://c411.org/api",
+        TorznabApiKey = "c411-key",
         TorboxApiKey = "torbox-key",
     };
 }

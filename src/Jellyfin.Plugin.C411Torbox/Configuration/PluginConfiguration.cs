@@ -8,13 +8,22 @@ namespace Jellyfin.Plugin.C411Torbox.Configuration;
 /// </summary>
 public class PluginConfiguration : BasePluginConfiguration
 {
+    /// <summary>Source des torrents : C411 en direct (Torznab, par défaut) ou via Prowlarr.</summary>
+    public IndexerMode IndexerMode { get; set; } = IndexerMode.Torznab;
+
+    /// <summary>URL de l'API Torznab de C411 (celle saisie dans Radarr/Sonarr).</summary>
+    public string TorznabUrl { get; set; } = "https://c411.org/api";
+
+    /// <summary>Clé API C411 (celle saisie dans Radarr/Sonarr).</summary>
+    public string TorznabApiKey { get; set; } = string.Empty;
+
     /// <summary>URL de Prowlarr, ex. http://prowlarr:9696.</summary>
     public string ProwlarrUrl { get; set; } = string.Empty;
 
     public string ProwlarrApiKey { get; set; } = string.Empty;
 
     /// <summary>
-    /// Accepte un certificat HTTPS non valide (auto-signé) pour Prowlarr uniquement.
+    /// Accepte un certificat HTTPS non valide (auto-signé) pour la source des torrents.
     /// À n'activer que pour un Prowlarr du réseau local.
     /// </summary>
     public bool ProwlarrIgnoreCertificateErrors { get; set; }
@@ -22,11 +31,17 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Identifiant de l'indexeur C411 dans Prowlarr (0 = non configuré).</summary>
     public int ProwlarrIndexerId { get; set; }
 
-    /// <summary>Catégories Newznab des films, séparées par des virgules.</summary>
-    public string MovieCategories { get; set; } = "2000";
+    /// <summary>
+    /// Catégories des films, séparées par des virgules.
+    /// Chez C411 (t=caps) : 2030 Film, 2060 Animation, 2070 Documentaire, 2000 Films &amp; Vidéos.
+    /// </summary>
+    public string MovieCategories { get; set; } = "2000,2030,2060,2070";
 
-    /// <summary>Catégories Newznab des séries, séparées par des virgules.</summary>
-    public string TvCategories { get; set; } = "5000";
+    /// <summary>
+    /// Catégories des séries, séparées par des virgules.
+    /// Chez C411 (t=caps) : 5000 Série TV, 5070 Animation Série, 5080 Émission TV.
+    /// </summary>
+    public string TvCategories { get; set; } = "5000,5070,5080";
 
     public string TorboxApiKey { get; set; } = string.Empty;
 

@@ -31,7 +31,7 @@ public class RequestService
 
     private readonly RequestRepository _repository;
     private readonly SearchResultCache _cache;
-    private readonly ProwlarrClient _prowlarr;
+    private readonly IndexerProvider _indexers;
     private readonly TorboxClient _torbox;
     private readonly ILibraryLookup _library;
     private readonly INotificationService _notifications;
@@ -44,7 +44,7 @@ public class RequestService
     public RequestService(
         RequestRepository repository,
         SearchResultCache cache,
-        ProwlarrClient prowlarr,
+        IndexerProvider indexers,
         TorboxClient torbox,
         ILibraryLookup library,
         INotificationService notifications,
@@ -53,7 +53,7 @@ public class RequestService
     {
         _repository = repository;
         _cache = cache;
-        _prowlarr = prowlarr;
+        _indexers = indexers;
         _torbox = torbox;
         _library = library;
         _notifications = notifications;
@@ -347,7 +347,7 @@ public class RequestService
             source ??= !string.IsNullOrEmpty(request.MagnetUrl)
                 ? new TorrentSource(null, request.MagnetUrl)
                 : !string.IsNullOrEmpty(request.DownloadUrl)
-                    ? await _prowlarr.DownloadAsync(request.DownloadUrl, ct).ConfigureAwait(false)
+                    ? await _indexers.Current.DownloadAsync(request.DownloadUrl, ct).ConfigureAwait(false)
                     : throw new RequestException("Aucun lien de téléchargement pour ce torrent.");
 
             var result = await _torbox.CreateTorrentAsync(source, request.TorrentTitle, ct).ConfigureAwait(false);

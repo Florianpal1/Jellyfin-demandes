@@ -19,12 +19,11 @@ public sealed record TorrentSource(byte[]? File, string? Magnet);
 public sealed record ProwlarrQuery(string Query, string Type, IReadOnlyList<int> Categories);
 
 /// <summary>Client de l'API v1 de Prowlarr (C411 est un indexeur de Prowlarr).</summary>
-public class ProwlarrClient
+public class ProwlarrClient : ITorrentIndexer
 {
-    public const string HttpClientName = "C411Torbox.Prowlarr";
+    public const string HttpClientName = TorrentFileDownloader.HttpClientName;
 
-    private const int MaxRedirects = 5;
-    private const long MaxTorrentFileBytes = 10 * 1024 * 1024;
+    private const string SourceName = "Prowlarr";
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfigProvider _config;
@@ -115,80 +114,101 @@ public class ProwlarrClient
         return results;
     }
 
+    public string DisplayName => SourceName;
+
     /// <summary>
-    /// Télécharge le .torrent via Prowlarr. Certains indexeurs redirigent vers un lien magnet :
-    /// les redirections sont donc suivies manuellement.
+    /// Requêtes essayées dans l'ordre : par identifiant d'abord (plus précis), puis par titre
+    /// si l'indexeur ne supporte pas la recherche par identifiant.
     /// </summary>
-    public async Task<TorrentSource> DownloadAsync(string downloadUrl, CancellationToken ct)
+    public async Task<IReadOnlyList<TorrentResult>> SearchAsync(TorrentSearchRequest request, CancellationToken ct)
     {
-        var client = _httpClientFactory.CreateClient(HttpClientName);
-        var url = new Uri(downloadUrl);
-        for (int i = 0; i <= MaxRedirects; i++)
+        HttpRequestException? lastError = null;
+        foreach (var query in BuildQueries(request, _config.Current))
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Add("X-Api-Key", _config.Current.ProwlarrApiKey);
-            using var response = await SendAsync(client, request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-
-            if (IsRedirect(response.StatusCode))
+            try
             {
-                var location = response.Headers.Location
-                    ?? throw new HttpRequestException("Redirection Prowlarr sans destination.");
-                var target = location.IsAbsoluteUri ? location : new Uri(url, location);
-                if (target.Scheme.Equals("magnet", StringComparison.OrdinalIgnoreCase))
+                var results = await SearchAsync(query, ct).ConfigureAwait(false);
+                if (results.Count > 0)
                 {
-                    return new TorrentSource(null, target.OriginalString);
+                    return results;
                 }
-
-                url = target;
-                continue;
             }
-
-            if (!response.IsSuccessStatusCode)
+            catch (HttpRequestException ex)
             {
-                throw new HttpRequestException($"Téléchargement du .torrent refusé par Prowlarr (HTTP {(int)response.StatusCode}).");
+                // Une recherche par identifiant peut être refusée par l'indexeur : on passe à la suivante.
+                lastError = ex;
             }
-
-            if (response.Content.Headers.ContentLength > MaxTorrentFileBytes)
-            {
-                throw new HttpRequestException("Fichier .torrent trop volumineux.");
-            }
-
-            var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-            if (bytes.Length > MaxTorrentFileBytes)
-            {
-                throw new HttpRequestException("Fichier .torrent trop volumineux.");
-            }
-
-            var text = bytes.Length < 4096 ? Encoding.UTF8.GetString(bytes).Trim() : string.Empty;
-            if (text.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase))
-            {
-                return new TorrentSource(null, text);
-            }
-
-            return new TorrentSource(bytes, null);
         }
 
-        throw new HttpRequestException("Trop de redirections lors du téléchargement du .torrent.");
+        if (lastError is not null)
+        {
+            throw lastError;
+        }
+
+        return Array.Empty<TorrentResult>();
     }
 
-    private static bool IsRedirect(HttpStatusCode code) => (int)code is >= 300 and < 400;
-
-    /// <summary>Envoie la requête en remplaçant les erreurs réseau par un message lisible.</summary>
-    private async Task<HttpResponseMessage> SendAsync(HttpClient client, HttpRequestMessage request, HttpCompletionOption option, CancellationToken ct)
+    public static IReadOnlyList<ProwlarrQuery> BuildQueries(TorrentSearchRequest request, Configuration.PluginConfiguration cfg)
     {
-        try
+        var ids = LibraryLookup.FilterIds(request.ProviderIds);
+        var queries = new List<ProwlarrQuery>();
+        if (request.Kind == MediaKind.Movie)
         {
-            return await client.SendAsync(request, option, ct).ConfigureAwait(false);
+            var cats = JsonElementExtensions.ParseIntList(cfg.MovieCategories).ToList();
+            if (ids.TryGetValue("Imdb", out var imdb))
+            {
+                queries.Add(new ProwlarrQuery($"{{ImdbId:{imdb}}}", "movie", cats));
+            }
+            else if (ids.TryGetValue("Tmdb", out var tmdb))
+            {
+                queries.Add(new ProwlarrQuery($"{{TmdbId:{tmdb}}}", "movie", cats));
+            }
+
+            var text = request.Year.HasValue
+                ? string.Create(CultureInfo.InvariantCulture, $"{request.Name} {request.Year}")
+                : request.Name;
+            queries.Add(new ProwlarrQuery(text, "search", cats));
         }
-        catch (HttpRequestException ex)
+        else
         {
-            throw new HttpRequestException("Prowlarr injoignable : " + NetworkErrors.Describe(ex, _certificates?.Get(request.RequestUri?.Host)), ex);
+            var cats = JsonElementExtensions.ParseIntList(cfg.TvCategories).ToList();
+            var season = request.Season!.Value;
+            var epToken = request.Episode.HasValue
+                ? string.Create(CultureInfo.InvariantCulture, $"{{Episode:{request.Episode.Value}}}")
+                : string.Empty;
+            var seasonToken = string.Create(CultureInfo.InvariantCulture, $"{{Season:{season}}}");
+            if (ids.TryGetValue("Tvdb", out var tvdb))
+            {
+                queries.Add(new ProwlarrQuery($"{{TvdbId:{tvdb}}}{seasonToken}{epToken}", "tvsearch", cats));
+            }
+            else if (ids.TryGetValue("Imdb", out var imdb))
+            {
+                queries.Add(new ProwlarrQuery($"{{ImdbId:{imdb}}}{seasonToken}{epToken}", "tvsearch", cats));
+            }
+
+            var sxx = request.Episode.HasValue
+                ? string.Create(CultureInfo.InvariantCulture, $"S{season:00}E{request.Episode.Value:00}")
+                : string.Create(CultureInfo.InvariantCulture, $"S{season:00}");
+            queries.Add(new ProwlarrQuery($"{request.Name} {sxx}", "search", cats));
         }
-        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
-        {
-            throw new HttpRequestException("Prowlarr injoignable : " + NetworkErrors.Describe(ex, _certificates?.Get(request.RequestUri?.Host)), ex);
-        }
+
+        return queries;
     }
+
+    public async Task<string> TestAsync(CancellationToken ct)
+    {
+        var indexers = await GetIndexersAsync(ct).ConfigureAwait(false);
+        return string.Create(CultureInfo.InvariantCulture, $"Connexion à Prowlarr réussie : {indexers.Count} indexeur(s).");
+    }
+
+    public Task<TorrentSource> DownloadAsync(string downloadUrl, CancellationToken ct)
+        => TorrentFileDownloader.DownloadAsync(
+            _httpClientFactory.CreateClient(HttpClientName),
+            downloadUrl,
+            SourceName,
+            _certificates,
+            r => r.Headers.Add("X-Api-Key", _config.Current.ProwlarrApiKey),
+            ct);
 
     private async Task<JsonDocument> GetJsonAsync(string relativeUrl, CancellationToken ct)
     {
@@ -208,7 +228,7 @@ public class ProwlarrClient
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(baseUri, relativeUrl));
         request.Headers.Add("X-Api-Key", cfg.ProwlarrApiKey);
         request.Headers.Accept.ParseAdd("application/json");
-        using var response = await SendAsync(client, request, HttpCompletionOption.ResponseContentRead, ct).ConfigureAwait(false);
+        using var response = await TorrentFileDownloader.SendAsync(client, request, HttpCompletionOption.ResponseContentRead, SourceName, _certificates, ct).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
             throw new HttpRequestException("Prowlarr a refusé la clé API (HTTP 401).");

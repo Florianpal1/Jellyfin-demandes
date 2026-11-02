@@ -37,7 +37,7 @@ public class CertificateDiagnostics
 
         if (errors.HasFlag(SslPolicyErrors.RemoteCertificateNameMismatch))
         {
-            reasons.Add("le nom de l'URL ne correspond pas au certificat");
+            reasons.Add("le nom de l'URL ne correspond pas au certificat (le DNS du NAS renvoie peut-être vers un autre serveur que celui de votre navigateur)");
         }
 
         var flags = chainStatus.Aggregate(X509ChainStatusFlags.NoError, (acc, f) => acc | f);

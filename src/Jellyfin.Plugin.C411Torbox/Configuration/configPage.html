@@ -17,6 +17,34 @@
                     </div>
 
                     <div class="verticalSection">
+                        <h3 class="sectionTitle">Source des torrents</h3>
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="IndexerMode">Accès à C411</label>
+                            <select is="emby-select" id="IndexerMode" class="emby-select-withcolor emby-select">
+                                <option value="Torznab">C411 en direct (comme dans Radarr / Sonarr)</option>
+                                <option value="Prowlarr">Via Prowlarr</option>
+                            </select>
+                            <div class="fieldDescription">« En direct » : mêmes URL et clé API que celles saisies dans Radarr / Sonarr. « Via Prowlarr » : uniquement si C411 est configuré dans un Prowlarr.</div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection" id="torznabSection">
+                        <h3 class="sectionTitle">C411 en direct</h3>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="TorznabUrl">URL de l'API C411</label>
+                            <input id="TorznabUrl" type="url" is="emby-input" placeholder="https://c411.org/api" />
+                            <div class="fieldDescription">Celle indiquée par C411 pour Radarr / Sonarr (https://c411.org ou https://c411.org/api).</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="TorznabApiKey">Clé API C411</label>
+                            <input id="TorznabApiKey" type="password" is="emby-input" autocomplete="off" />
+                            <div class="fieldDescription">La même clé que dans Radarr / Sonarr (profil C411).</div>
+                        </div>
+                        <button is="emby-button" type="button" id="btnTestTorznab" class="raised emby-button"><span>Enregistrer et tester C411</span></button>
+                        <div id="torznabResult" class="fieldDescription"></div>
+                    </div>
+
+                    <div class="verticalSection" id="prowlarrSection">
                         <h3 class="sectionTitle">Prowlarr (indexeur C411)</h3>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="ProwlarrUrl">URL de Prowlarr</label>
@@ -43,20 +71,24 @@
                         </div>
                         <button is="emby-button" type="button" id="btnTestProwlarr" class="raised emby-button"><span>Enregistrer et tester Prowlarr</span></button>
                         <div id="prowlarrResult" class="fieldDescription"></div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h3 class="sectionTitle">Recherche</h3>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="MovieCategories">Catégories films</label>
                             <input id="MovieCategories" type="text" is="emby-input" />
-                            <div class="fieldDescription">Identifiants Newznab séparés par des virgules (2000 = films).</div>
+                            <div class="fieldDescription">Séparées par des virgules. C411 : 2030 Film, 2060 Animation, 2070 Documentaire, 2000 Films &amp; Vidéos.</div>
                         </div>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="TvCategories">Catégories séries</label>
                             <input id="TvCategories" type="text" is="emby-input" />
-                            <div class="fieldDescription">Identifiants Newznab séparés par des virgules (5000 = séries TV).</div>
+                            <div class="fieldDescription">Séparées par des virgules. C411 : 5000 Série TV, 5070 Animation Série, 5080 Émission TV.</div>
                         </div>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="HashLookupLimit">Limite de calcul des hash</label>
                             <input id="HashLookupLimit" type="number" min="0" max="100" is="emby-input" />
-                            <div class="fieldDescription">Si Prowlarr ne fournit pas l'infohash, le .torrent des N résultats les plus seedés est téléchargé pour vérifier le cache Torbox. Chaque téléchargement peut compter sur C411.</div>
+                            <div class="fieldDescription">Si C411 ne fournit pas l'infohash, le .torrent des N résultats les plus seedés est téléchargé pour vérifier le cache Torbox. Chaque téléchargement peut compter sur C411.</div>
                         </div>
                     </div>
 
@@ -119,7 +151,7 @@
             (function () {
                 var pluginId = 'a1beec8b-cc16-4382-96ca-8d4cdbfd032c';
                 var page = document.querySelector('#C411TorboxConfigPage');
-                var textFields = ['ProwlarrUrl', 'ProwlarrApiKey', 'MovieCategories', 'TvCategories', 'TorboxApiKey', 'DiscordWebhookUrl'];
+                var textFields = ['TorznabUrl', 'TorznabApiKey', 'ProwlarrUrl', 'ProwlarrApiKey', 'MovieCategories', 'TvCategories', 'TorboxApiKey', 'DiscordWebhookUrl'];
                 var numberFields = ['HashLookupLimit', 'MovieMaxSizeGb', 'EpisodeMaxSizeGb', 'SeasonMaxSizeGb', 'MinSeedersForAutoApproval'];
                 var savedIndexerId = 0;
 
@@ -147,6 +179,16 @@
                     select.value = String(savedIndexerId || 0);
                 }
 
+                function modeOf(value) {
+                    return value === 'Prowlarr' || value === 1 ? 'Prowlarr' : 'Torznab';
+                }
+
+                function showMode() {
+                    var mode = q('IndexerMode').value;
+                    q('torznabSection').style.display = mode === 'Torznab' ? '' : 'none';
+                    q('prowlarrSection').style.display = mode === 'Prowlarr' ? '' : 'none';
+                }
+
                 function load() {
                     Dashboard.showLoadingMsg();
                     q('c411UiLink').href = ApiClient.getUrl('C411Torbox/ui');
@@ -158,6 +200,8 @@
                         q('ProwlarrIgnoreCertificateErrors').checked = !!config.ProwlarrIgnoreCertificateErrors;
                         savedIndexerId = config.ProwlarrIndexerId || 0;
                         setIndexerOptions([]);
+                        q('IndexerMode').value = modeOf(config.IndexerMode);
+                        showMode();
                         Dashboard.hideLoadingMsg();
                     });
                 }
@@ -171,6 +215,7 @@
                         config.AutoApproveWhenCached = q('AutoApproveWhenCached').checked;
                         config.ProwlarrIgnoreCertificateErrors = q('ProwlarrIgnoreCertificateErrors').checked;
                         config.ProwlarrIndexerId = parseInt(q('ProwlarrIndexerId').value, 10) || 0;
+                        config.IndexerMode = q('IndexerMode').value;
                         savedIndexerId = config.ProwlarrIndexerId;
                         return ApiClient.updatePluginConfiguration(pluginId, config);
                     });
@@ -199,6 +244,12 @@
                             if (c411) { q('ProwlarrIndexerId').value = String(c411.id); }
                         }
                     });
+                });
+
+                q('IndexerMode').addEventListener('change', showMode);
+
+                q('btnTestTorznab').addEventListener('click', function () {
+                    test('C411Torbox/Admin/Test/Torznab', 'torznabResult');
                 });
 
                 q('btnTestTorbox').addEventListener('click', function () {
