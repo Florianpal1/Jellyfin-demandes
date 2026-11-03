@@ -116,6 +116,7 @@ public class TorznabClientTests
 
         var results = await client.SearchAsync(
             new TorrentSearchRequest { Kind = MediaKind.Movie, Name = "Dune", Year = 2021, ProviderIds = new() { ["Tmdb"] = "438631" } },
+            _ => true,
             CancellationToken.None);
 
         Assert.Equal(2, results.Count);
@@ -156,12 +157,64 @@ public class TorznabClientTests
             : FakeHttp.Json("""{ "success": true, "data": {} }"""));
         var config = TorznabConfig();
         var indexers = new IndexerProvider(new ProwlarrClient(http, config), new TorznabClient(http, config), config);
-        var service = new TorrentSearchService(indexers, new TorboxClient(http, config), new FakeLibrary(), new SearchResultCache(), config, NullLogger<TorrentSearchService>.Instance);
+        var service = new TorrentSearchService(indexers, new TorboxClient(http, config), new FakeLibrary(), new SearchResultCache(), config, new FakeAliases(), NullLogger<TorrentSearchService>.Instance);
 
         var response = await service.SearchAsync(
             new TorrentSearchRequest { Kind = MediaKind.Movie, Name = "Dune", ProviderIds = new() { ["Tmdb"] = "438631" } }, CancellationToken.None);
 
         Assert.Equal(["Dune.2021.MULTi.1080p.BluRay", "Dune.2021.720p"], response.Results.Select(r => r.Title).ToArray());
         Assert.DoesNotContain(http.Calls, c => c.Request.RequestUri!.Host == "prowlarr");
+    }
+
+    [Fact]
+    public void ParseResults_ReadsMediaIds()
+    {
+        var rss = """
+            <rss xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel><item>
+              <title>Dune.2021.1080p</title><link>https://c411.org/dl/1</link>
+              <torznab:attr name="tmdbid" value="438631" />
+              <torznab:attr name="imdb" value="1160419" />
+              <torznab:attr name="tvdbid" value="0" />
+            </item></channel></rss>
+            """;
+
+        var r = Assert.Single(TorznabClient.ParseResults(XDocument.Parse(rss)));
+
+        Assert.Equal(("438631", "1160419", (string?)null), (r.TmdbId, r.ImdbId, r.TvdbId));
+    }
+
+    [Fact]
+    public async Task SearchService_IgnoresUnrelatedResults_FromIdSearch_ThenUsesTitleSearch()
+    {
+        // L'indexeur ignore tmdbid et renvoie les dernières sorties : elles sont écartées, la recherche par titre prend le relais.
+        const string unrelated = """
+            <rss xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>
+              <item><title>Oppenheimer.2023.MULTi.2160p</title><link>https://c411.org/dl/9</link>
+                <torznab:attr name="infohash" value="2222222222222222222222222222222222222222" /></item>
+              <item><title>Dune.Part.Two.2024.1080p</title><link>https://c411.org/dl/8</link>
+                <torznab:attr name="infohash" value="3333333333333333333333333333333333333333" /></item>
+            </channel></rss>
+            """;
+        var http = new FakeHttp((req, _) => req.RequestUri!.Host != "c411.org"
+            ? FakeHttp.Json("""{ "success": true, "data": {} }""")
+            : req.RequestUri.Query.Contains("tmdbid", StringComparison.Ordinal) ? FakeHttp.Json(unrelated) : FakeHttp.Json(Rss));
+        var config = TorznabConfig();
+        var indexers = new IndexerProvider(new ProwlarrClient(http, config), new TorznabClient(http, config), config);
+        var service = new TorrentSearchService(indexers, new TorboxClient(http, config), new FakeLibrary(), new SearchResultCache(), config, new FakeAliases(), NullLogger<TorrentSearchService>.Instance);
+
+        var response = await service.SearchAsync(
+            new TorrentSearchRequest { Kind = MediaKind.Movie, Name = "Dune", Year = 2021, ProviderIds = new() { ["Tmdb"] = "438631" } }, CancellationToken.None);
+
+        Assert.Equal(["Dune.2021.MULTi.1080p.BluRay", "Dune.2021.720p"], response.Results.Select(r => r.Title).ToArray());
+    }
+
+    [Fact]
+    public void BuildQueries_AddsTitleSearchForAlternateNames()
+    {
+        var q = TorznabClient.BuildQueries(
+            new TorrentSearchRequest { Kind = MediaKind.Movie, Name = "Le Parrain", Year = 1972, AlternateNames = ["The Godfather", "le parrain"] },
+            new PluginConfiguration { MovieCategories = string.Empty });
+
+        Assert.Equal(["q=Le Parrain 1972", "q=The Godfather 1972"], q.Select(x => x.Describe()[(x.Describe().IndexOf("q=", StringComparison.Ordinal))..]).ToArray());
     }
 }

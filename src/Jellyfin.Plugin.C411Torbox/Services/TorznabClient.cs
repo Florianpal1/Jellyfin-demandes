@@ -41,11 +41,11 @@ public class TorznabClient : ITorrentIndexer
 
     public string DisplayName => SourceName;
 
-    public async Task<IReadOnlyList<TorrentResult>> SearchAsync(TorrentSearchRequest request, CancellationToken ct)
+    public async Task<IReadOnlyList<TorrentResult>> SearchAsync(TorrentSearchRequest request, Func<TorrentResult, bool> accept, CancellationToken ct)
     {
         foreach (var query in BuildQueries(request, _config.Current))
         {
-            var results = await QueryAsync(query, ct).ConfigureAwait(false);
+            var results = (await QueryAsync(query, ct).ConfigureAwait(false)).Where(accept).ToList();
             if (results.Count > 0)
             {
                 return results;
@@ -134,15 +134,32 @@ public class TorznabClient : ITorrentIndexer
             queries.Add(new TorznabQuery(p));
         }
 
-        var text = isMovie
-            ? (request.Year.HasValue ? string.Create(CultureInfo.InvariantCulture, $"{request.Name} {request.Year}") : request.Name)
-            : request.Episode.HasValue
-                ? string.Create(CultureInfo.InvariantCulture, $"{request.Name} S{request.Season:00}E{request.Episode:00}")
-                : string.Create(CultureInfo.InvariantCulture, $"{request.Name} S{request.Season:00}");
-        var textQuery = Base("search");
-        textQuery.Add(new("q", text));
-        queries.Add(new TorznabQuery(textQuery));
+        foreach (var text in TextQueries(request))
+        {
+            var textQuery = Base("search");
+            textQuery.Add(new("q", text));
+            queries.Add(new TorznabQuery(textQuery));
+        }
+
         return queries;
+    }
+
+    /// <summary>
+    /// Recherches par titre, titre principal puis titres alternatifs : « Dune 2021 », « The Bear S02E03 », « The Bear S02 ».
+    /// </summary>
+    internal static IEnumerable<string> TextQueries(TorrentSearchRequest request)
+    {
+        var suffix = request.Kind == MediaKind.Movie
+            ? (request.Year.HasValue ? string.Create(CultureInfo.InvariantCulture, $" {request.Year}") : string.Empty)
+            : request.Episode.HasValue
+                ? string.Create(CultureInfo.InvariantCulture, $" S{request.Season:00}E{request.Episode:00}")
+                : string.Create(CultureInfo.InvariantCulture, $" S{request.Season:00}");
+        return new[] { request.Name }
+            .Concat(request.AlternateNames)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(n => n + suffix);
     }
 
     internal async Task<IReadOnlyList<TorrentResult>> QueryAsync(TorznabQuery query, CancellationToken ct)
@@ -273,9 +290,16 @@ public class TorznabClient : ITorrentIndexer
                 InfoHash = TorrentHash.Normalize(attrs.GetValueOrDefault("infohash")) ?? TorrentHash.FromMagnet(magnet),
                 MagnetUrl = string.IsNullOrWhiteSpace(magnet) ? null : magnet,
                 DownloadUrl = string.IsNullOrWhiteSpace(download) ? null : download,
+                TmdbId = Id(attrs.GetValueOrDefault("tmdbid") ?? attrs.GetValueOrDefault("tmdb")),
+                ImdbId = Id(attrs.GetValueOrDefault("imdbid") ?? attrs.GetValueOrDefault("imdb")),
+                TvdbId = Id(attrs.GetValueOrDefault("tvdbid") ?? attrs.GetValueOrDefault("tvdb")),
             });
         }
 
         return results;
     }
+
+    /// <summary>Identifiant renseigné, ou null (vide et « 0 » = inconnu).</summary>
+    internal static string? Id(string? value)
+        => string.IsNullOrWhiteSpace(value) || value.Trim().TrimStart('0').Length == 0 ? null : value.Trim();
 }

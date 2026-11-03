@@ -24,6 +24,7 @@ public class TorrentSearchService
     private readonly ILibraryLookup _library;
     private readonly SearchResultCache _cache;
     private readonly IConfigProvider _config;
+    private readonly ITitleAliasProvider _aliases;
     private readonly ILogger<TorrentSearchService> _logger;
 
     public TorrentSearchService(
@@ -32,6 +33,7 @@ public class TorrentSearchService
         ILibraryLookup library,
         SearchResultCache cache,
         IConfigProvider config,
+        ITitleAliasProvider aliases,
         ILogger<TorrentSearchService> logger)
     {
         _indexers = indexers;
@@ -39,6 +41,7 @@ public class TorrentSearchService
         _library = library;
         _cache = cache;
         _config = config;
+        _aliases = aliases;
         _logger = logger;
     }
 
@@ -70,8 +73,19 @@ public class TorrentSearchService
             return response;
         }
 
+        try
+        {
+            request.AlternateNames = await _aliases.GetAlternateNamesAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Titres alternatifs de « {Name} » indisponibles", request.Name);
+        }
+
+        // Les torrents sans rapport avec le média (identifiant, titre, année, saison ou épisode différents) sont écartés.
+        var matcher = new ReleaseMatcher(request);
         var indexer = _indexers.Current;
-        var results = (await indexer.SearchAsync(request, ct).ConfigureAwait(false)).ToList();
+        var results = (await indexer.SearchAsync(request, matcher.IsRelevant, ct).ConfigureAwait(false)).ToList();
         var sources = await FillMissingHashesAsync(indexer, results, cfg.HashLookupLimit, warnings, ct).ConfigureAwait(false);
 
         var hashes = results.Select(r => r.InfoHash).OfType<string>().ToList();

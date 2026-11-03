@@ -108,6 +108,9 @@ public class ProwlarrClient : ITorrentIndexer
                 InfoHash = TorrentHash.Normalize(item.GetStringOrNull("infoHash")) ?? TorrentHash.FromMagnet(magnet),
                 MagnetUrl = magnet,
                 DownloadUrl = download,
+                TmdbId = IdOrNull(item, "tmdbId"),
+                ImdbId = IdOrNull(item, "imdbId"),
+                TvdbId = IdOrNull(item, "tvdbId"),
             });
         }
 
@@ -116,18 +119,25 @@ public class ProwlarrClient : ITorrentIndexer
 
     public string DisplayName => SourceName;
 
+    /// <summary>Prowlarr renvoie 0 quand l'identifiant est inconnu.</summary>
+    private static string? IdOrNull(JsonElement item, string name)
+    {
+        var value = item.GetLong(name);
+        return value > 0 ? value.ToString(CultureInfo.InvariantCulture) : TorznabClient.Id(item.GetStringOrNull(name));
+    }
+
     /// <summary>
     /// Requêtes essayées dans l'ordre : par identifiant d'abord (plus précis), puis par titre
     /// si l'indexeur ne supporte pas la recherche par identifiant.
     /// </summary>
-    public async Task<IReadOnlyList<TorrentResult>> SearchAsync(TorrentSearchRequest request, CancellationToken ct)
+    public async Task<IReadOnlyList<TorrentResult>> SearchAsync(TorrentSearchRequest request, Func<TorrentResult, bool> accept, CancellationToken ct)
     {
         HttpRequestException? lastError = null;
         foreach (var query in BuildQueries(request, _config.Current))
         {
             try
             {
-                var results = await SearchAsync(query, ct).ConfigureAwait(false);
+                var results = (await SearchAsync(query, ct).ConfigureAwait(false)).Where(accept).ToList();
                 if (results.Count > 0)
                 {
                     return results;
@@ -164,10 +174,7 @@ public class ProwlarrClient : ITorrentIndexer
                 queries.Add(new ProwlarrQuery($"{{TmdbId:{tmdb}}}", "movie", cats));
             }
 
-            var text = request.Year.HasValue
-                ? string.Create(CultureInfo.InvariantCulture, $"{request.Name} {request.Year}")
-                : request.Name;
-            queries.Add(new ProwlarrQuery(text, "search", cats));
+            queries.AddRange(TorznabClient.TextQueries(request).Select(text => new ProwlarrQuery(text, "search", cats)));
         }
         else if (request.Kind == MediaKind.Book)
         {
@@ -190,10 +197,7 @@ public class ProwlarrClient : ITorrentIndexer
                 queries.Add(new ProwlarrQuery($"{{ImdbId:{imdb}}}{seasonToken}{epToken}", "tvsearch", cats));
             }
 
-            var sxx = request.Episode.HasValue
-                ? string.Create(CultureInfo.InvariantCulture, $"S{season:00}E{request.Episode.Value:00}")
-                : string.Create(CultureInfo.InvariantCulture, $"S{season:00}");
-            queries.Add(new ProwlarrQuery($"{request.Name} {sxx}", "search", cats));
+            queries.AddRange(TorznabClient.TextQueries(request).Select(text => new ProwlarrQuery(text, "search", cats)));
         }
 
         return queries;
