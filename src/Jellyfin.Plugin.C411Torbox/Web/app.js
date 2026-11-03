@@ -71,7 +71,7 @@
 
     function describe(r) {
         const pad = (n) => String(n).padStart(2, '0');
-        if (r.scope === 'Movie') return r.mediaTitle + (r.year ? ` (${r.year})` : '');
+        if (r.scope === 'Movie' || r.scope === 'Book') return r.mediaTitle + (r.year ? ` (${r.year})` : '');
         if (r.scope === 'Episode') return `${r.mediaTitle} S${pad(r.season)}E${pad(r.episode)}`;
         return `${r.mediaTitle} – saison ${r.season}`;
     }
@@ -219,9 +219,10 @@
                 const img = safeImage(m.imageUrl);
                 box.append(el('button', { class: 'card', type: 'button', onclick: () => openMedia(m) },
                     m.inLibrary ? el('span', { class: 'tag' }, 'Dans la bibliothèque') : null,
-                    el('div', { class: 'poster' }, img ? el('img', { src: img, alt: '', loading: 'lazy' }) : 'Pas d\'affiche'),
+                    el('div', { class: 'poster' }, img ? el('img', { src: img, alt: '', loading: 'lazy' })
+                        : m.isFreeText ? 'Recherche libre' : (kind === 'Book' ? 'Pas de couverture' : 'Pas d\'affiche')),
                     el('div', { class: 'info' },
-                        el('div', { class: 'title' }, m.name),
+                        el('div', { class: 'title' }, m.isFreeText ? `« ${m.name} » tel quel` : m.name),
                         el('div', { class: 'muted' }, m.year || ''))));
             }
         } catch (e) {
@@ -241,7 +242,7 @@
         $('#torrentTable').hidden = true;
         $('#mediaDetail').hidden = false;
         $('#mediaDetail').scrollIntoView({ behavior: 'smooth', block: 'start' });
-        if (m.kind === 'Movie') searchTorrents();
+        if (m.kind !== 'Series') searchTorrents();
     }
 
     async function searchTorrents(ev) {
@@ -458,6 +459,11 @@
         $('#torrentForm').addEventListener('submit', searchTorrents);
         $('#detailClose').addEventListener('click', () => { $('#mediaDetail').hidden = true; });
         $('#episodeToggle').addEventListener('change', (e) => { $('#episodeLabel').hidden = !e.target.checked; });
+        $('#mediaKind').addEventListener('change', (e) => {
+            $('#mediaQuery').placeholder = e.target.value === 'Book'
+                ? 'Titre du livre, de la BD ou du journal…'
+                : 'Titre du film ou de la série…';
+        });
         $('#adminFilter').addEventListener('change', loadAdmin);
         $('#adminRefresh').addEventListener('click', loadAdmin);
         document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));

@@ -83,11 +83,13 @@ public class AdminController : C411TorboxControllerBase
     {
         var lines = new List<string>();
         bool ok = true;
-        foreach (var (kind, label) in new[] { (MediaKind.Movie, "Films"), (MediaKind.Series, "Séries") })
+        foreach (var (kind, label) in new[] { (MediaKind.Movie, "Films"), (MediaKind.Series, "Séries"), (MediaKind.Book, "Livres") })
         {
             var root = _import.ResolveRoot(kind);
             var check = CheckFolder(root);
-            ok &= check is null;
+
+            // Les livres sont facultatifs : sans dossier ni bibliothèque Livres, seul leur rangement échouera.
+            ok &= check is null || (kind == MediaKind.Book && root is null);
             lines.Add($"{label} : {(root ?? "aucun dossier")} — {check ?? "OK"}");
         }
 
@@ -97,6 +99,7 @@ public class AdminController : C411TorboxControllerBase
             message = string.Join(" | ", lines),
             movieLibraries = _library.GetLibraryFolders(MediaKind.Movie),
             seriesLibraries = _library.GetLibraryFolders(MediaKind.Series),
+            bookLibraries = _library.GetLibraryFolders(MediaKind.Book),
         });
     }
 

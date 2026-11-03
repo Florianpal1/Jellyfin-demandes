@@ -169,6 +169,10 @@ public class ProwlarrClient : ITorrentIndexer
                 : request.Name;
             queries.Add(new ProwlarrQuery(text, "search", cats));
         }
+        else if (request.Kind == MediaKind.Book)
+        {
+            queries.Add(new ProwlarrQuery(request.Name, "search", JsonElementExtensions.ParseIntList(cfg.BookCategories).ToList()));
+        }
         else
         {
             var cats = JsonElementExtensions.ParseIntList(cfg.TvCategories).ToList();

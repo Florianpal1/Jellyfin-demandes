@@ -335,7 +335,7 @@ public sealed class ImportServiceTests : IDisposable
         {
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN ImportProgress; ALTER TABLE Requests DROP COLUMN ImportedPath; PRAGMA user_version = 1;";
+            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN ImportProgress; ALTER TABLE Requests DROP COLUMN ImportedPath; ALTER TABLE Requests DROP COLUMN BookIds; PRAGMA user_version = 1;";
             cmd.ExecuteNonQuery();
         }
 
@@ -348,5 +348,24 @@ public sealed class ImportServiceTests : IDisposable
         var saved = repo.Get(r.Id)!;
         Assert.Equal("/films/Dune", saved.ImportedPath);
         Assert.Equal(1, saved.ImportProgress);
+    }
+
+    [Fact]
+    public void Repository_MigratesV2Database()
+    {
+        var path = Path.Combine(_dir, "v2.db");
+        _ = new RequestRepository(path);
+        using (var conn = new SqliteConnection("Data Source=" + path + ";Pooling=False"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN BookIds; PRAGMA user_version = 2;";
+            cmd.ExecuteNonQuery();
+        }
+
+        var repo = new RequestRepository(path);
+        var r = repo.Insert(new MediaRequest { UserId = Guid.NewGuid(), MediaKind = MediaKind.Book, Scope = RequestScope.Book, MediaTitle = "Astérix", BookIds = "Isbn=978", Status = RequestStatus.Pending });
+
+        Assert.Equal("Isbn=978", repo.Get(r.Id)!.BookIds);
     }
 }

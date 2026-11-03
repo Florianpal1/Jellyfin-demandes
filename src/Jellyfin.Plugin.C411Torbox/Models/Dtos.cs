@@ -22,6 +22,11 @@ public class MediaSearchResult
 
     public Dictionary<string, string> ProviderIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Fiche sans fournisseur de métadonnées (livres : recherche du texte saisi tel quel, sans identifiant).
+    /// </summary>
+    public bool IsFreeText { get; set; }
+
     /// <summary>Film déjà présent dans la bibliothèque, ou série dont au moins un épisode est présent.</summary>
     public bool InLibrary { get; set; }
 }
@@ -70,9 +75,12 @@ public class TorrentSearchRequest
     };
 
     [JsonIgnore]
-    public RequestScope Scope => Kind == MediaKind.Movie
-        ? RequestScope.Movie
-        : Episode.HasValue ? RequestScope.Episode : RequestScope.Season;
+    public RequestScope Scope => Kind switch
+    {
+        MediaKind.Movie => RequestScope.Movie,
+        MediaKind.Book => RequestScope.Book,
+        _ => Episode.HasValue ? RequestScope.Episode : RequestScope.Season,
+    };
 }
 
 /// <summary>Un torrent trouvé via Prowlarr.</summary>

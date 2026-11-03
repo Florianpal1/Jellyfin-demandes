@@ -43,6 +43,12 @@ public class PluginConfiguration : BasePluginConfiguration
     /// </summary>
     public string TvCategories { get; set; } = "5000,5070,5080";
 
+    /// <summary>
+    /// Catégories des livres, BD, comics et presse, séparées par des virgules.
+    /// Newznab : 7000 Livres, 7010 Magazines, 7020 E-books, 7030 Comics.
+    /// </summary>
+    public string BookCategories { get; set; } = "7000,7010,7020,7030";
+
     public string TorboxApiKey { get; set; } = string.Empty;
 
     /// <summary>
@@ -57,6 +63,9 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Dossier des séries (vide : premier dossier de la bibliothèque Jellyfin de type Séries).</summary>
     public string SeriesPath { get; set; } = string.Empty;
+
+    /// <summary>Dossier des livres (vide : premier dossier de la bibliothèque Jellyfin de type Livres).</summary>
+    public string BooksPath { get; set; } = string.Empty;
 
     /// <summary>Supprime le torrent de Torbox une fois les fichiers rangés (libère un emplacement Torbox).</summary>
     public bool DeleteFromTorboxAfterImport { get; set; }
@@ -75,6 +84,9 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Taille max (Go) d'un pack de saison pour l'auto-validation. 0 = désactivé.</summary>
     public double SeasonMaxSizeGb { get; set; } = 30;
+
+    /// <summary>Taille max (Go) d'un livre, d'une BD ou d'un pack pour l'auto-validation. 0 = désactivé.</summary>
+    public double BookMaxSizeGb { get; set; } = 2;
 
     /// <summary>Nombre minimum de seeders pour l'auto-validation par la taille.</summary>
     public int MinSeedersForAutoApproval { get; set; } = 5;

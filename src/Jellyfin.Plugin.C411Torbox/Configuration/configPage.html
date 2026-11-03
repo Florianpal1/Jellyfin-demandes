@@ -86,6 +86,11 @@
                             <div class="fieldDescription">Séparées par des virgules. C411 : 5000 Série TV, 5070 Animation Série, 5080 Émission TV.</div>
                         </div>
                         <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="BookCategories">Catégories livres, BD et presse</label>
+                            <input id="BookCategories" type="text" is="emby-input" />
+                            <div class="fieldDescription">Séparées par des virgules. Newznab : 7000 Livres, 7010 Magazines, 7020 E-books, 7030 Comics. Les couvertures et fiches viennent de l'extension Jellyfin « Bookshelf » si elle est installée ; sinon la recherche se fait sur le titre saisi.</div>
+                        </div>
+                        <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="HashLookupLimit">Limite de calcul des hash</label>
                             <input id="HashLookupLimit" type="number" min="0" max="100" is="emby-input" />
                             <div class="fieldDescription">Si C411 ne fournit pas l'infohash, le .torrent des N résultats les plus seedés est téléchargé pour vérifier le cache Torbox. Chaque téléchargement peut compter sur C411.</div>
@@ -124,6 +129,12 @@
                             <datalist id="c411SeriesLibraries"></datalist>
                             <div class="fieldDescription">Rangement : <code>Titre (2008) [tmdbid-1396]/Season 01/Titre - S01E01 - Nom de l'épisode WEBDL-1080p.mkv</code>. Une série déjà présente garde son dossier actuel.</div>
                         </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="BooksPath">Dossier des livres</label>
+                            <input id="BooksPath" type="text" is="emby-input" list="c411BookLibraries" placeholder="vide = bibliothèque Livres de Jellyfin" />
+                            <datalist id="c411BookLibraries"></datalist>
+                            <div class="fieldDescription">Rangement : <code>Titre (2015)/Titre (2015).epub</code> ; un pack (intégrale, numéros de presse) garde le nom de chaque fichier. Facultatif si vous ne demandez pas de livres.</div>
+                        </div>
                         <div class="checkboxContainer">
                             <label class="emby-checkbox-label">
                                 <input id="ImportSubtitles" type="checkbox" is="emby-checkbox" />
@@ -161,6 +172,10 @@
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="SeasonMaxSizeGb">Taille max d'un pack de saison (Go)</label>
                             <input id="SeasonMaxSizeGb" type="number" min="0" step="0.1" is="emby-input" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="BookMaxSizeGb">Taille max d'un livre, d'une BD ou d'un pack (Go)</label>
+                            <input id="BookMaxSizeGb" type="number" min="0" step="0.1" is="emby-input" />
                             <div class="fieldDescription">0 = jamais de validation automatique par la taille pour ce type, et pas de limite pour un torrent en cache Torbox.</div>
                         </div>
                         <div class="inputContainer">
@@ -189,9 +204,9 @@
             (function () {
                 var pluginId = 'a1beec8b-cc16-4382-96ca-8d4cdbfd032c';
                 var page = document.querySelector('#C411TorboxConfigPage');
-                var textFields = ['TorznabUrl', 'TorznabApiKey', 'ProwlarrUrl', 'ProwlarrApiKey', 'MovieCategories', 'TvCategories', 'TorboxApiKey', 'DiscordWebhookUrl', 'MoviesPath', 'SeriesPath'];
+                var textFields = ['TorznabUrl', 'TorznabApiKey', 'ProwlarrUrl', 'ProwlarrApiKey', 'MovieCategories', 'TvCategories', 'BookCategories', 'TorboxApiKey', 'DiscordWebhookUrl', 'MoviesPath', 'SeriesPath', 'BooksPath'];
                 var checkFields = ['AutoApproveWhenCached', 'ProwlarrIgnoreCertificateErrors', 'AutoImportEnabled', 'ImportSubtitles', 'DeleteFromTorboxAfterImport'];
-                var numberFields = ['HashLookupLimit', 'MovieMaxSizeGb', 'EpisodeMaxSizeGb', 'SeasonMaxSizeGb', 'MinSeedersForAutoApproval'];
+                var numberFields = ['HashLookupLimit', 'MovieMaxSizeGb', 'EpisodeMaxSizeGb', 'SeasonMaxSizeGb', 'BookMaxSizeGb', 'MinSeedersForAutoApproval'];
                 var savedIndexerId = 0;
 
                 function q(id) { return page.querySelector('#' + id); }
@@ -312,6 +327,7 @@
                     ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('C411Torbox/Admin/Test/Import'), dataType: 'json' }).then(function (res) {
                         fillLibraries('c411MovieLibraries', res.movieLibraries);
                         fillLibraries('c411SeriesLibraries', res.seriesLibraries);
+                        fillLibraries('c411BookLibraries', res.bookLibraries);
                     }).catch(function () { });
                 });
 

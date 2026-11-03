@@ -25,6 +25,7 @@ public static class ApprovalRules
             RequestScope.Movie => config.MovieMaxSizeGb,
             RequestScope.Episode => config.EpisodeMaxSizeGb,
             RequestScope.Season => config.SeasonMaxSizeGb,
+            RequestScope.Book => config.BookMaxSizeGb,
             _ => 0,
         };
 

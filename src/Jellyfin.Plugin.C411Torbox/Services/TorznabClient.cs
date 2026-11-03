@@ -69,13 +69,19 @@ public class TorznabClient : ITorrentIndexer
     /// <summary>
     /// Requêtes à essayer dans l'ordre : par identifiant TMDB (le plus fiable), puis IMDb, puis par titre.
     /// C411 annonce (t=caps) : movie-search q,imdbid,tmdbid ; tv-search q,season,ep,tmdbid,imdbid.
+    /// Livres : recherche par titre uniquement.
     /// </summary>
     public static IReadOnlyList<TorznabQuery> BuildQueries(TorrentSearchRequest request, Configuration.PluginConfiguration cfg)
     {
         var ids = LibraryLookup.FilterIds(request.ProviderIds);
         var queries = new List<TorznabQuery>();
         var isMovie = request.Kind == MediaKind.Movie;
-        var cats = string.Join(",", JsonElementExtensions.ParseIntList(isMovie ? cfg.MovieCategories : cfg.TvCategories));
+        var cats = string.Join(",", JsonElementExtensions.ParseIntList(request.Kind switch
+        {
+            MediaKind.Movie => cfg.MovieCategories,
+            MediaKind.Book => cfg.BookCategories,
+            _ => cfg.TvCategories,
+        }));
 
         List<KeyValuePair<string, string>> Base(string type)
         {
@@ -98,6 +104,15 @@ public class TorznabClient : ITorrentIndexer
                     p.Add(new("ep", request.Episode.Value.ToString(CultureInfo.InvariantCulture)));
                 }
             }
+        }
+
+        // Livres : pas d'identifiant connu de C411, recherche par titre seul (l'année figure rarement dans le nom).
+        if (request.Kind == MediaKind.Book)
+        {
+            var bookQuery = Base("search");
+            bookQuery.Add(new("q", request.Name));
+            queries.Add(new TorznabQuery(bookQuery));
+            return queries;
         }
 
         var idType = isMovie ? "movie" : "tvsearch";

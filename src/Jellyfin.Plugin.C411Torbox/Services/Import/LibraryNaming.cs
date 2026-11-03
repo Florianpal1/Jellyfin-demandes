@@ -12,6 +12,7 @@ namespace Jellyfin.Plugin.C411Torbox.Services.Import;
 /// <list type="bullet">
 /// <item>Films/Titre (2010) [tmdbid-27205]/Titre (2010) Bluray-1080p.mkv</item>
 /// <item>Séries/Titre (2008) [tmdbid-1396]/Season 01/Titre - S01E01 - Nom de l'épisode WEBDL-1080p.mkv</item>
+/// <item>Livres/Titre (2015)/Titre (2015).epub (un pack garde le nom de chaque fichier)</item>
 /// </list>
 /// </summary>
 public static partial class LibraryNaming
@@ -43,6 +44,10 @@ public static partial class LibraryNaming
 
     public static string SeriesFolder(string title, int? year, string? tmdbId)
         => Clean(WithYear(title, year)) + TmdbTag(tmdbId);
+
+    /// <summary>Dossier d'un livre, et nom du fichier quand le torrent n'en contient qu'un.</summary>
+    public static string BookName(string title, int? year)
+        => Clean(WithYear(title, year));
 
     public static string SeasonFolder(int season)
         => season == 0 ? "Specials" : "Season " + season.ToString("00", CultureInfo.InvariantCulture);

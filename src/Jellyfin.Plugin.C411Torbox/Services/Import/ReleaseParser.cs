@@ -22,6 +22,12 @@ public static partial class ReleaseParser
         ".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".sup",
     };
 
+    /// <summary>Livres numériques, BD / comics (archives d'images) et presse.</summary>
+    private static readonly HashSet<string> BookExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".fb2", ".djvu", ".cbz", ".cbr", ".cb7", ".cbt",
+    };
+
     /// <summary>Dossiers de bonus ignorés (comme Radarr / Sonarr).</summary>
     private static readonly HashSet<string> ExtraFolders = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -42,6 +48,8 @@ public static partial class ReleaseParser
     public static bool IsVideo(string path) => VideoExtensions.Contains(Extension(path));
 
     public static bool IsSubtitle(string path) => SubtitleExtensions.Contains(Extension(path));
+
+    public static bool IsBook(string path) => BookExtensions.Contains(Extension(path));
 
     /// <summary>Extension en minuscules, point compris (« .mkv »).</summary>
     public static string Extension(string path)

@@ -80,6 +80,8 @@ public sealed class RequestServiceTests : IDisposable
     {
         var context = scope == RequestScope.Movie
             ? new TorrentSearchRequest { Kind = MediaKind.Movie, Name = "Dune", Year = 2021, ProviderIds = new() { ["Imdb"] = "tt1160419" } }
+            : scope == RequestScope.Book
+            ? new TorrentSearchRequest { Kind = MediaKind.Book, Name = "Astérix le Gaulois", Year = 1961, ProviderIds = new() { ["GoogleBooks"] = "gb1", ["Isbn"] = "9782012101333" } }
             : new TorrentSearchRequest { Kind = MediaKind.Series, Name = "The Bear", Season = 1, Episode = scope == RequestScope.Episode ? 2 : null, ProviderIds = new() { ["Tvdb"] = "1" } };
         var result = new TorrentResult
         {
@@ -245,6 +247,43 @@ public sealed class RequestServiceTests : IDisposable
         _library.Episodes = 10;
         await _service.CheckAvailabilityAsync(CancellationToken.None);
         Assert.Equal(RequestStatus.Available, _repository.Get(r.Id)!.Status);
+    }
+
+    [Fact]
+    public async Task Book_UsesBookThreshold_KeepsItsIds_AndBecomesAvailable()
+    {
+        // Seuil livres : 2 Go par défaut.
+        var big = await _service.CreateAsync(Alice, "alice", AddResult(3 * Gb, 50, scope: RequestScope.Book, hash: "b".PadRight(40, 'b')), CancellationToken.None);
+        Assert.Equal(RequestStatus.Pending, big.Status);
+
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(200 * 1024 * 1024, 50, scope: RequestScope.Book), CancellationToken.None);
+        Assert.Equal(RequestStatus.SentToTorbox, r.Status);
+        Assert.Equal(MediaKind.Book, r.MediaKind);
+        Assert.Equal(RequestScope.Book, r.Scope);
+        Assert.Null(r.Season);
+
+        var stored = _repository.Get(r.Id)!;
+        Assert.Equal("GoogleBooks=gb1;Isbn=9782012101333", stored.BookIds);
+        Assert.Equal("Astérix le Gaulois (1961)", RequestService.Describe(stored));
+
+        await _service.CheckAvailabilityAsync(CancellationToken.None);
+        Assert.Equal(RequestStatus.SentToTorbox, _repository.Get(r.Id)!.Status);
+        Assert.Equal("gb1", _library.LastBookCheck!.Value.Ids["GoogleBooks"]);
+        Assert.Equal("Astérix le Gaulois", _library.LastBookCheck!.Value.Title);
+
+        _library.BookAvailable = true;
+        await _service.CheckAvailabilityAsync(CancellationToken.None);
+        Assert.Equal(RequestStatus.Available, _repository.Get(r.Id)!.Status);
+    }
+
+    [Fact]
+    public async Task Book_AlreadyInLibrary_IsRefused()
+    {
+        _library.BookInLibrary = true;
+
+        var ex = await Assert.ThrowsAsync<RequestException>(() => _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50, scope: RequestScope.Book), CancellationToken.None));
+
+        Assert.Equal(409, ex.StatusCode);
     }
 
     [Fact]

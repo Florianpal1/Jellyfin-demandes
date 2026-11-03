@@ -70,7 +70,7 @@ public class RequestService
 
     public static string Describe(MediaRequest r) => r.Scope switch
     {
-        RequestScope.Movie => r.Year.HasValue ? string.Create(CultureInfo.InvariantCulture, $"{r.MediaTitle} ({r.Year})") : r.MediaTitle,
+        RequestScope.Movie or RequestScope.Book => r.Year.HasValue ? string.Create(CultureInfo.InvariantCulture, $"{r.MediaTitle} ({r.Year})") : r.MediaTitle,
         RequestScope.Episode => string.Create(CultureInfo.InvariantCulture, $"{r.MediaTitle} S{r.Season:00}E{r.Episode:00}"),
         _ => string.Create(CultureInfo.InvariantCulture, $"{r.MediaTitle} saison {r.Season}"),
     };
@@ -86,11 +86,13 @@ public class RequestService
         try
         {
             var ids = LibraryLookup.FilterIds(ctx.ProviderIds);
+            var bookIds = LibraryLookup.FilterBookIds(ctx.ProviderIds);
             int episodesAtRequest = 0;
             switch (ctx.Scope)
             {
                 case RequestScope.Movie when _library.IsMovieInLibrary(ids):
                 case RequestScope.Episode when _library.CountEpisodes(ids, ctx.Season!.Value, ctx.Episode) > 0:
+                case RequestScope.Book when _library.IsBookInLibrary(bookIds):
                     throw new RequestException("Ce média est déjà dans la bibliothèque.", 409);
                 case RequestScope.Season:
                     episodesAtRequest = _library.CountEpisodes(ids, ctx.Season!.Value, null);
@@ -117,6 +119,7 @@ public class RequestService
                 TmdbId = ids.GetValueOrDefault("Tmdb"),
                 ImdbId = ids.GetValueOrDefault("Imdb"),
                 TvdbId = ids.GetValueOrDefault("Tvdb"),
+                BookIds = FormatBookIds(bookIds),
                 PosterUrl = ctx.ImageUrl,
                 Season = ctx.Season,
                 Episode = ctx.Episode,
@@ -338,6 +341,7 @@ public class RequestService
                 {
                     RequestScope.Movie => _library.IsMovieInLibrary(ids),
                     RequestScope.Episode => _library.CountEpisodes(ids, r.Season ?? 0, r.Episode) > 0,
+                    RequestScope.Book => _library.IsBookAvailable(ids, r.MediaTitle, r.ImportedPath, r.CreatedAt),
                     _ => _library.CountEpisodes(ids, r.Season ?? 0, null) > r.EpisodesInLibraryAtRequest,
                 };
                 if (!available)
@@ -375,7 +379,26 @@ public class RequestService
             ids["Tvdb"] = r.TvdbId;
         }
 
+        foreach (var pair in (r.BookIds ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var i = pair.IndexOf('=', StringComparison.Ordinal);
+            if (i > 0 && i < pair.Length - 1)
+            {
+                ids[pair[..i]] = pair[(i + 1)..];
+            }
+        }
+
         return ids;
+    }
+
+    /// <summary>« GoogleBooks=abc;Isbn=978… » (null sans identifiant).</summary>
+    internal static string? FormatBookIds(IReadOnlyDictionary<string, string> bookIds)
+    {
+        var text = string.Join(";", bookIds
+            .Where(kv => !kv.Value.Contains(';', StringComparison.Ordinal) && !kv.Value.Contains('=', StringComparison.Ordinal))
+            .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => kv.Key + "=" + kv.Value));
+        return text.Length == 0 ? null : text;
     }
 
     internal static string FormatSize(long bytes)

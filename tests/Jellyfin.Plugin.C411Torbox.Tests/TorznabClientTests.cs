@@ -97,6 +97,16 @@ public class TorznabClientTests
     }
 
     [Fact]
+    public void BuildQueries_Book_TitleOnlyInBookCategories()
+    {
+        var q = TorznabClient.BuildQueries(
+            new TorrentSearchRequest { Kind = MediaKind.Book, Name = "Astérix le Gaulois", Year = 1961, ProviderIds = new() { ["GoogleBooks"] = "gb1" } },
+            new PluginConfiguration { BookCategories = "7000,7030" });
+
+        Assert.Equal("t=search&limit=100&cat=7000,7030&q=Astérix le Gaulois", Assert.Single(q).Describe());
+    }
+
+    [Fact]
     public async Task Search_SendsApiKey_AndFallsBackToTitleWhenIdSearchIsEmpty()
     {
         var http = new FakeHttp((req, _) => req.RequestUri!.Query.Contains("tmdbid", StringComparison.Ordinal)

@@ -30,6 +30,9 @@ public class MediaRequest
 
     public string? TvdbId { get; set; }
 
+    /// <summary>Identifiants des livres (Google Books, Comic Vine, ISBN), au format « Nom=valeur;Nom=valeur ».</summary>
+    public string? BookIds { get; set; }
+
     public string? PosterUrl { get; set; }
 
     public int? Season { get; set; }

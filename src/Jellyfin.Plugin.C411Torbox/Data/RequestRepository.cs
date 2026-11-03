@@ -11,7 +11,7 @@ namespace Jellyfin.Plugin.C411Torbox.Data;
 /// <summary>Stockage SQLite des demandes et des notifications.</summary>
 public class RequestRepository
 {
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
 
     private static readonly RequestStatus[] ActiveStatuses =
     [
@@ -54,10 +54,10 @@ public class RequestRepository
             using var conn = Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO Requests (UserId, UserName, CreatedAt, UpdatedAt, MediaKind, Scope, MediaTitle, Year, TmdbId, ImdbId, TvdbId,
+                INSERT INTO Requests (UserId, UserName, CreatedAt, UpdatedAt, MediaKind, Scope, MediaTitle, Year, TmdbId, ImdbId, TvdbId, BookIds,
                     PosterUrl, Season, Episode, TorrentTitle, SizeBytes, Seeders, Leechers, InfoHash, ProwlarrGuid, MagnetUrl, DownloadUrl,
                     WasCachedOnTorbox, AutoApprovalReason, Status, ReviewedBy, ReviewedAt, RejectReason, TorboxTorrentId, TorboxProgress, LastError, EpisodesInLibraryAtRequest)
-                VALUES ($UserId, $UserName, $CreatedAt, $UpdatedAt, $MediaKind, $Scope, $MediaTitle, $Year, $TmdbId, $ImdbId, $TvdbId,
+                VALUES ($UserId, $UserName, $CreatedAt, $UpdatedAt, $MediaKind, $Scope, $MediaTitle, $Year, $TmdbId, $ImdbId, $TvdbId, $BookIds,
                     $PosterUrl, $Season, $Episode, $TorrentTitle, $SizeBytes, $Seeders, $Leechers, $InfoHash, $ProwlarrGuid, $MagnetUrl, $DownloadUrl,
                     $WasCachedOnTorbox, $AutoApprovalReason, $Status, $ReviewedBy, $ReviewedAt, $RejectReason, $TorboxTorrentId, $TorboxProgress, $LastError, $EpisodesInLibraryAtRequest);
                 SELECT last_insert_rowid();
@@ -188,6 +188,7 @@ public class RequestRepository
         Add("$TmdbId", r.TmdbId);
         Add("$ImdbId", r.ImdbId);
         Add("$TvdbId", r.TvdbId);
+        Add("$BookIds", r.BookIds);
         Add("$PosterUrl", r.PosterUrl);
         Add("$Season", r.Season);
         Add("$Episode", r.Episode);
@@ -247,6 +248,7 @@ public class RequestRepository
                 TmdbId = S("TmdbId"),
                 ImdbId = S("ImdbId"),
                 TvdbId = S("TvdbId"),
+                BookIds = S("BookIds"),
                 PosterUrl = S("PosterUrl"),
                 Season = (int?)L("Season"),
                 Episode = (int?)L("Episode"),
@@ -308,14 +310,25 @@ public class RequestRepository
             }
 
             // v2 : import automatique des fichiers vers le NAS.
-            using var v2 = conn.CreateCommand();
-            v2.Transaction = tx;
-            v2.CommandText = """
-                ALTER TABLE Requests ADD COLUMN ImportProgress REAL NULL;
-                ALTER TABLE Requests ADD COLUMN ImportedPath TEXT NULL;
-                PRAGMA user_version = 2;
+            if (version < 2)
+            {
+                using var v2 = conn.CreateCommand();
+                v2.Transaction = tx;
+                v2.CommandText = """
+                    ALTER TABLE Requests ADD COLUMN ImportProgress REAL NULL;
+                    ALTER TABLE Requests ADD COLUMN ImportedPath TEXT NULL;
+                    """;
+                v2.ExecuteNonQuery();
+            }
+
+            // v3 : livres (identifiants Google Books / Comic Vine / ISBN).
+            using var v3 = conn.CreateCommand();
+            v3.Transaction = tx;
+            v3.CommandText = """
+                ALTER TABLE Requests ADD COLUMN BookIds TEXT NULL;
+                PRAGMA user_version = 3;
                 """;
-            v2.ExecuteNonQuery();
+            v3.ExecuteNonQuery();
             tx.Commit();
         }
     }
