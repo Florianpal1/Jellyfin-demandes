@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
@@ -9,7 +10,7 @@ using MediaBrowser.Model.Entities;
 
 namespace Jellyfin.Plugin.C411Torbox.Services;
 
-/// <summary>Présence d'un média dans la bibliothèque Jellyfin (par identifiants TMDB/IMDb/TVDB).</summary>
+/// <summary>Présence d'un média dans la bibliothèque Jellyfin (par identifiants TMDB/IMDb/TVDB, ou Google Books/Comic Vine/ISBN).</summary>
 public interface ILibraryLookup
 {
     bool IsMovieInLibrary(IReadOnlyDictionary<string, string> providerIds);
@@ -25,13 +26,25 @@ public interface ILibraryLookup
     /// <summary>Dossier existant d'une saison de la série, sinon null.</summary>
     string? GetSeasonFolder(IReadOnlyDictionary<string, string> providerIds, int season);
 
-    /// <summary>Dossiers des bibliothèques Jellyfin de type Films ou Séries.</summary>
+    /// <summary>Livre présent dans la bibliothèque, par identifiant (Google Books, Comic Vine, ISBN) uniquement.</summary>
+    bool IsBookInLibrary(IReadOnlyDictionary<string, string> providerIds);
+
+    /// <summary>
+    /// Livre arrivé dans la bibliothèque : par identifiant, ou parmi les livres ajoutés depuis <paramref name="since"/>,
+    /// rangé dans <paramref name="folder"/> ou portant le même titre (les livres ont rarement un identifiant fiable).
+    /// </summary>
+    bool IsBookAvailable(IReadOnlyDictionary<string, string> providerIds, string title, string? folder, DateTime since);
+
+    /// <summary>Dossiers des bibliothèques Jellyfin de type Films, Séries ou Livres.</summary>
     IReadOnlyList<string> GetLibraryFolders(Models.MediaKind kind);
 }
 
 internal sealed class LibraryLookup : ILibraryLookup
 {
     internal static readonly string[] SupportedProviders = ["Tmdb", "Imdb", "Tvdb"];
+
+    /// <summary>Identifiants des livres (extension Bookshelf de Jellyfin).</summary>
+    internal static readonly string[] BookProviders = ["GoogleBooks", "ComicVine", "Isbn"];
 
     private readonly ILibraryManager _libraryManager;
 
@@ -117,9 +130,37 @@ internal sealed class LibraryLookup : ILibraryLookup
         return null;
     }
 
+    public bool IsBookInLibrary(IReadOnlyDictionary<string, string> providerIds)
+        => FindItems(BaseItemKind.Book, FilterBookIds(providerIds), 1).Count > 0;
+
+    public bool IsBookAvailable(IReadOnlyDictionary<string, string> providerIds, string title, string? folder, DateTime since)
+    {
+        if (IsBookInLibrary(providerIds))
+        {
+            return true;
+        }
+
+        var prefix = string.IsNullOrEmpty(folder) ? null : Path.TrimEndingDirectorySeparator(folder) + Path.DirectorySeparatorChar;
+        var query = new InternalItemsQuery
+        {
+            IncludeItemTypes = [BaseItemKind.Book],
+            Recursive = true,
+            IsVirtualItem = false,
+            MinDateCreated = since,
+        };
+        return _libraryManager.GetItemList(query).Any(b =>
+            (prefix is not null && !string.IsNullOrEmpty(b.Path) && b.Path.StartsWith(prefix, StringComparison.Ordinal))
+            || SameTitle(b.Name, title));
+    }
+
     public IReadOnlyList<string> GetLibraryFolders(Models.MediaKind kind)
     {
-        var type = kind == Models.MediaKind.Movie ? CollectionTypeOptions.movies : CollectionTypeOptions.tvshows;
+        var type = kind switch
+        {
+            Models.MediaKind.Movie => CollectionTypeOptions.movies,
+            Models.MediaKind.Book => CollectionTypeOptions.books,
+            _ => CollectionTypeOptions.tvshows,
+        };
         return _libraryManager.GetVirtualFolders()
             .Where(f => f.CollectionType == type)
             .SelectMany(f => f.Locations ?? [])
@@ -130,7 +171,7 @@ internal sealed class LibraryLookup : ILibraryLookup
 
     private IReadOnlyList<BaseItem> FindItems(BaseItemKind kind, IReadOnlyDictionary<string, string> providerIds, int limit)
     {
-        var ids = FilterIds(providerIds);
+        var ids = kind == BaseItemKind.Book ? FilterBookIds(providerIds) : FilterIds(providerIds);
 
         // Sans identifiant, HasAnyProviderId ne filtrerait rien : on ne renvoie surtout pas toute la bibliothèque.
         if (ids.Count == 0)
@@ -150,11 +191,38 @@ internal sealed class LibraryLookup : ILibraryLookup
     }
 
     internal static Dictionary<string, string> FilterIds(IReadOnlyDictionary<string, string> providerIds)
+        => Filter(providerIds, SupportedProviders);
+
+    internal static Dictionary<string, string> FilterBookIds(IReadOnlyDictionary<string, string> providerIds)
+        => Filter(providerIds, BookProviders);
+
+    /// <summary>Même titre, sans tenir compte de la casse, des accents ni de la ponctuation.</summary>
+    internal static bool SameTitle(string? a, string? b)
+    {
+        var x = NormalizeTitle(a);
+        return x.Length > 0 && x == NormalizeTitle(b);
+    }
+
+    private static string NormalizeTitle(string? s)
+    {
+        var sb = new StringBuilder();
+        foreach (var c in (s ?? string.Empty).Normalize(NormalizationForm.FormD))
+        {
+            if (char.IsLetterOrDigit(c))
+            {
+                sb.Append(char.ToLowerInvariant(c));
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static Dictionary<string, string> Filter(IReadOnlyDictionary<string, string> providerIds, string[] allowed)
         => providerIds
             .Where(kv => !string.IsNullOrWhiteSpace(kv.Value)
-                && SupportedProviders.Contains(kv.Key, StringComparer.OrdinalIgnoreCase))
+                && allowed.Contains(kv.Key, StringComparer.OrdinalIgnoreCase))
             .ToDictionary(
-                kv => SupportedProviders.First(p => p.Equals(kv.Key, StringComparison.OrdinalIgnoreCase)),
+                kv => allowed.First(p => p.Equals(kv.Key, StringComparison.OrdinalIgnoreCase)),
                 kv => kv.Value.Trim(),
                 StringComparer.OrdinalIgnoreCase);
 }

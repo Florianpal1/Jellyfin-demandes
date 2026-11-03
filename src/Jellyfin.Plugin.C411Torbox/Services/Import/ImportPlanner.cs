@@ -32,7 +32,7 @@ public sealed record ImportPlan(IReadOnlyList<ImportItem> Items, IReadOnlyList<s
 /// <summary>Où ranger les fichiers d'une demande (dossiers déjà résolus par l'appelant).</summary>
 public sealed class ImportTarget
 {
-    /// <summary>Dossier du film, ou dossier de la série.</summary>
+    /// <summary>Dossier du film, du livre, ou dossier de la série.</summary>
     public required string Folder { get; init; }
 
     /// <summary>Dossier d'une saison (dossier existant dans Jellyfin, sinon « Season 01 » dans le dossier de la série).</summary>
@@ -55,7 +55,7 @@ public static class ImportPlanner
 {
     /// <summary>Épisodes (saison, épisode) contenus dans le torrent pour la demande, avant tout filtrage « déjà présent ».</summary>
     public static IReadOnlyList<(int Season, int Episode)> FindEpisodes(MediaRequest request, IReadOnlyList<TorboxFile> files)
-        => request.MediaKind == MediaKind.Movie
+        => request.MediaKind != MediaKind.Series
             ? Array.Empty<(int, int)>()
             : SelectEpisodeFiles(request, files, new List<string>())
                 .SelectMany(x => x.Episodes.Select(e => (x.Season, e)))
@@ -63,9 +63,12 @@ public static class ImportPlanner
                 .ToList();
 
     public static ImportPlan Plan(MediaRequest request, IReadOnlyList<TorboxFile> files, ImportTarget target)
-        => request.MediaKind == MediaKind.Movie
-            ? PlanMovie(request, files, target)
-            : PlanEpisodes(request, files, target);
+        => request.MediaKind switch
+        {
+            MediaKind.Movie => PlanMovie(request, files, target),
+            MediaKind.Book => PlanBook(request, files, target),
+            _ => PlanEpisodes(request, files, target),
+        };
 
     private static bool IsCandidateVideo(TorboxFile f)
         => ReleaseParser.IsVideo(f.Name) && !ReleaseParser.IsInExtraFolder(f.Name) && !ReleaseParser.IsSample(f.Name, f.Size);
@@ -92,6 +95,47 @@ public static class ImportPlanner
         if (target.IncludeSubtitles)
         {
             AddSubtitles(items, files.Where(f => ReleaseParser.IsSubtitle(f.Name) && !ReleaseParser.IsInExtraFolder(f.Name)), target.Folder, baseName);
+        }
+
+        return new ImportPlan(items, skipped);
+    }
+
+    /// <summary>
+    /// Un seul livre : renommé « Titre (Année) ». Un pack (intégrale, collection, numéros de presse) :
+    /// chaque fichier garde son nom, à plat dans le dossier du livre.
+    /// </summary>
+    private static ImportPlan PlanBook(MediaRequest request, IReadOnlyList<TorboxFile> files, ImportTarget target)
+    {
+        var books = files.Where(f => ReleaseParser.IsBook(f.Name) && !ReleaseParser.IsInExtraFolder(f.Name))
+            .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (books.Count == 0)
+        {
+            throw new ImportException("Aucun livre exploitable (epub, pdf, cbz, cbr…) dans le torrent.");
+        }
+
+        var skipped = files.Except(books).Select(f => ReleaseParser.FileName(f.Name) + " : pas un livre").ToList();
+        if (books.Count == 1)
+        {
+            var single = books[0];
+            var name = LibraryNaming.BookName(request.MediaTitle, request.Year) + ReleaseParser.Extension(single.Name);
+            return new ImportPlan(new[] { new ImportItem(single, Path.Combine(target.Folder, name)) }, skipped);
+        }
+
+        var items = new List<ImportItem>();
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var book in books)
+        {
+            var file = ReleaseParser.FileName(book.Name);
+            var ext = ReleaseParser.Extension(file);
+            var baseName = LibraryNaming.Clean(file[..^ext.Length]);
+            var dest = Path.Combine(target.Folder, baseName + ext);
+            for (int n = 2; !used.Add(dest); n++)
+            {
+                dest = Path.Combine(target.Folder, baseName + " (" + n.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")" + ext);
+            }
+
+            items.Add(new ImportItem(book, dest));
         }
 
         return new ImportPlan(items, skipped);

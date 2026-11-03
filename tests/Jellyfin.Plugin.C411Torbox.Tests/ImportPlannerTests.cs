@@ -152,6 +152,66 @@ public class ImportPlannerTests
         Assert.Equal(9000 * Mb + 1, plan.TotalBytes);
     }
 
+    private static MediaRequest Book() => new()
+    {
+        MediaKind = MediaKind.Book,
+        Scope = RequestScope.Book,
+        MediaTitle = "Astérix : le Gaulois",
+        Year = 1961,
+        TorrentTitle = "Asterix.Le.Gaulois.FRENCH.CBZ",
+    };
+
+    [Fact]
+    public void Book_SingleFile_IsRenamedAfterTheTitle()
+    {
+        var files = new[]
+        {
+            new TorboxFile(1, "Asterix/Asterix.T01.FRENCH.CBZ.eBook.cbz", 80 * Mb),
+            new TorboxFile(2, "Asterix/cover.jpg", 1),
+            new TorboxFile(3, "Asterix/Asterix.nfo", 1),
+        };
+        var folder = Path.Combine(Root, LibraryNaming.BookName("Astérix : le Gaulois", 1961));
+
+        var plan = ImportPlanner.Plan(Book(), files, new ImportTarget { Folder = folder });
+
+        Assert.Equal(Path.Combine(Root, "Astérix - le Gaulois (1961)"), folder);
+        Assert.Equal(Path.Combine(folder, "Astérix - le Gaulois (1961).cbz"), Assert.Single(plan.Items).Destination);
+        Assert.Equal(2, plan.Skipped.Count);
+    }
+
+    [Fact]
+    public void Book_Pack_KeepsEachFileName_AndAvoidsCollisions()
+    {
+        var files = new[]
+        {
+            new TorboxFile(1, "Pack/T02 - La Serpe d'or.CBR", 60 * Mb),
+            new TorboxFile(2, "Pack/T01 - Astérix le Gaulois.cbz", 60 * Mb),
+            new TorboxFile(3, "Pack/Bonus/T01 - Astérix le Gaulois.cbz", 60 * Mb),
+            new TorboxFile(4, "Pack/Autre/T01 - Astérix le Gaulois.pdf", 10 * Mb),
+            new TorboxFile(5, "Pack/Doublon/T01 - Astérix le Gaulois.cbz", 60 * Mb),
+        };
+
+        var plan = ImportPlanner.Plan(Book(), files, new ImportTarget { Folder = Root });
+
+        Assert.Equal(
+            new[]
+            {
+                Path.Combine(Root, "T01 - Astérix le Gaulois.pdf"),
+                Path.Combine(Root, "T01 - Astérix le Gaulois.cbz"),
+                Path.Combine(Root, "T01 - Astérix le Gaulois (2).cbz"),
+                Path.Combine(Root, "T02 - La Serpe d'or.cbr"),
+            },
+            plan.Items.Select(i => i.Destination));
+    }
+
+    [Fact]
+    public void Book_WithoutBookFile_Fails()
+    {
+        var files = new[] { new TorboxFile(1, "Pack/video.mkv", 700 * Mb) };
+
+        Assert.Throws<ImportException>(() => ImportPlanner.Plan(Book(), files, new ImportTarget { Folder = Root }));
+    }
+
     [Fact]
     public void Movie_WithoutVideo_Fails()
     {

@@ -14,6 +14,7 @@ public class ApprovalRulesTests
         MovieMaxSizeGb = 15,
         EpisodeMaxSizeGb = 5,
         SeasonMaxSizeGb = 30,
+        BookMaxSizeGb = 2,
         MinSeedersForAutoApproval = 5,
     };
 
@@ -21,6 +22,7 @@ public class ApprovalRulesTests
     [InlineData(RequestScope.Movie, 15, 0)]
     [InlineData(RequestScope.Episode, 5, 0)]
     [InlineData(RequestScope.Season, 30, 0)]
+    [InlineData(RequestScope.Book, 2, 0)]
     public void Cached_UnderThreshold_IsAutoApproved_WhateverSeeders(RequestScope scope, long sizeGb, int seeders)
         => Assert.Equal(AutoApprovalReason.Cached, ApprovalRules.Evaluate(scope, sizeGb * Gb, seeders, true, Config));
 
@@ -28,6 +30,7 @@ public class ApprovalRulesTests
     [InlineData(RequestScope.Movie, 16)]
     [InlineData(RequestScope.Episode, 6)]
     [InlineData(RequestScope.Season, 31)]
+    [InlineData(RequestScope.Book, 3)]
     public void Cached_OverThreshold_IsNotAutoApproved(RequestScope scope, long sizeGb)
         => Assert.Equal(AutoApprovalReason.None, ApprovalRules.Evaluate(scope, sizeGb * Gb, 100, true, Config));
 

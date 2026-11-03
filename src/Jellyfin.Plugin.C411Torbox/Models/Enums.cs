@@ -7,6 +7,9 @@ public enum MediaKind
 {
     Movie,
     Series,
+
+    /// <summary>Livre, BD, comics, manga ou presse (un seul type : C411 les range dans les mêmes catégories).</summary>
+    Book,
 }
 
 /// <summary>Portée d'une demande : détermine le seuil de taille appliqué.</summary>
@@ -16,6 +19,7 @@ public enum RequestScope
     Movie,
     Episode,
     Season,
+    Book,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<RequestStatus>))]

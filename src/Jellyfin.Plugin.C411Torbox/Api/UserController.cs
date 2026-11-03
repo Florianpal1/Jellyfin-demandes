@@ -46,7 +46,7 @@ public class UserController : C411TorboxControllerBase
     public ActionResult Me()
         => JsonOk(new CurrentUserInfo { UserId = CurrentUserId, Name = CurrentUserName, IsAdmin = IsAdmin });
 
-    /// <summary>Recherche de fiches films / séries.</summary>
+    /// <summary>Recherche de fiches films / séries / livres.</summary>
     [HttpGet("Media/Search")]
     public async Task<ActionResult> SearchMedia([FromQuery, Required] string query, [FromQuery] MediaKind kind, CancellationToken ct)
     {
@@ -58,7 +58,7 @@ public class UserController : C411TorboxControllerBase
         return JsonOk(await _metadata.SearchAsync(query.Trim(), kind, ct).ConfigureAwait(false));
     }
 
-    /// <summary>Recherche des torrents C411 pour un média (film, saison ou épisode).</summary>
+    /// <summary>Recherche des torrents C411 pour un média (film, saison, épisode ou livre).</summary>
     [HttpPost("Torrents/Search")]
     public async Task<ActionResult> SearchTorrents([FromBody] TorrentSearchBody body, CancellationToken ct)
     {

@@ -67,6 +67,23 @@ internal sealed class FakeLibrary : ILibraryLookup
 
     public List<string> SeriesFolders { get; } = new();
 
+    public List<string> BookFolders { get; } = new();
+
+    public bool BookInLibrary { get; set; }
+
+    /// <summary>Livre arrivé (par identifiant, dossier ou titre) ; les derniers arguments reçus sont gardés.</summary>
+    public bool BookAvailable { get; set; }
+
+    public (IReadOnlyDictionary<string, string> Ids, string Title, string? Folder)? LastBookCheck { get; private set; }
+
+    public bool IsBookInLibrary(IReadOnlyDictionary<string, string> providerIds) => BookInLibrary;
+
+    public bool IsBookAvailable(IReadOnlyDictionary<string, string> providerIds, string title, string? folder, DateTime since)
+    {
+        LastBookCheck = (providerIds, title, folder);
+        return BookAvailable;
+    }
+
     public int CountEpisodes(IReadOnlyDictionary<string, string> providerIds, int season, int? episode)
         => PresentEpisodes.Count > 0
             ? PresentEpisodes.Count(p => p.Season == season && (episode is null || p.Episode == episode))
@@ -76,8 +93,12 @@ internal sealed class FakeLibrary : ILibraryLookup
 
     public string? GetSeasonFolder(IReadOnlyDictionary<string, string> providerIds, int season) => null;
 
-    public IReadOnlyList<string> GetLibraryFolders(Models.MediaKind kind)
-        => kind == Models.MediaKind.Movie ? MovieFolders : SeriesFolders;
+    public IReadOnlyList<string> GetLibraryFolders(Models.MediaKind kind) => kind switch
+    {
+        Models.MediaKind.Movie => MovieFolders,
+        Models.MediaKind.Book => BookFolders,
+        _ => SeriesFolders,
+    };
 }
 
 internal sealed class FakeNotifications : INotificationService

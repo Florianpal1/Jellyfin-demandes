@@ -60,6 +60,9 @@ public class TorrentSearchService
             case RequestScope.Season:
                 response.EpisodesInLibrary = _library.CountEpisodes(request.ProviderIds, request.Season!.Value, null);
                 break;
+            case RequestScope.Book:
+                response.AlreadyInLibrary = _library.IsBookInLibrary(request.ProviderIds);
+                break;
         }
 
         if (response.AlreadyInLibrary)
@@ -122,7 +125,7 @@ public class TorrentSearchService
             throw new ArgumentException("Numéro de saison ou d'épisode invalide.");
         }
 
-        if (request.Kind == MediaKind.Movie)
+        if (request.Kind is MediaKind.Movie or MediaKind.Book)
         {
             request.Season = null;
             request.Episode = null;

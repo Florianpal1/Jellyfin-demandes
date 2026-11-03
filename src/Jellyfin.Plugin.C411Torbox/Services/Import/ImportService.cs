@@ -20,7 +20,8 @@ public interface ILibraryRefresher
 
 /// <summary>
 /// Remplace l'application « RealDebrid » + Radarr / Sonarr : télécharge depuis Torbox les fichiers des
-/// demandes terminées, puis les range dans la bibliothèque avec le nommage standard Radarr / Sonarr.
+/// demandes terminées, puis les range dans la bibliothèque avec le nommage standard Radarr / Sonarr
+/// (livres : un dossier « Titre (Année) » par demande).
 /// Une seule demande (un seul torrent) est traitée à la fois.
 /// </summary>
 public class ImportService
@@ -69,10 +70,15 @@ public class ImportService
 
     public bool Enabled => _config.Current.AutoImportEnabled;
 
-    /// <summary>Dossier racine des films ou des séries : réglage du plugin, sinon première bibliothèque Jellyfin du bon type.</summary>
+    /// <summary>Dossier racine des films, séries ou livres : réglage du plugin, sinon première bibliothèque Jellyfin du bon type.</summary>
     public string? ResolveRoot(MediaKind kind)
     {
-        var configured = (kind == MediaKind.Movie ? _config.Current.MoviesPath : _config.Current.SeriesPath)?.Trim();
+        var configured = (kind switch
+        {
+            MediaKind.Movie => _config.Current.MoviesPath,
+            MediaKind.Book => _config.Current.BooksPath,
+            _ => _config.Current.SeriesPath,
+        })?.Trim();
         return string.IsNullOrEmpty(configured) ? _library.GetLibraryFolders(kind).FirstOrDefault() : configured;
     }
 
@@ -207,9 +213,12 @@ public class ImportService
         var root = ResolveRoot(request.MediaKind);
         if (string.IsNullOrEmpty(root))
         {
-            throw new ImportException(request.MediaKind == MediaKind.Movie
-                ? "Aucun dossier de films : renseignez-le dans la configuration du plugin."
-                : "Aucun dossier de séries : renseignez-le dans la configuration du plugin.");
+            throw new ImportException(request.MediaKind switch
+            {
+                MediaKind.Movie => "Aucun dossier de films : renseignez-le dans la configuration du plugin.",
+                MediaKind.Book => "Aucun dossier de livres : renseignez-le dans la configuration du plugin.",
+                _ => "Aucun dossier de séries : renseignez-le dans la configuration du plugin.",
+            });
         }
 
         if (!Directory.Exists(root))
@@ -226,6 +235,10 @@ public class ImportService
                 Folder = Path.Combine(root, LibraryNaming.MovieFolder(request.MediaTitle, request.Year, request.TmdbId)),
                 IncludeSubtitles = _config.Current.ImportSubtitles,
             };
+        }
+        else if (request.MediaKind == MediaKind.Book)
+        {
+            target = new ImportTarget { Folder = Path.Combine(root, LibraryNaming.BookName(request.MediaTitle, request.Year)) };
         }
         else
         {

@@ -286,3 +286,17 @@ Fonctionnement :
 2. Reprise `Range` sur les liens CDN de Torbox (sans reprise, le fichier repart de zéro, ce qui reste correct).
 3. Scan ciblé déclenché par `ILibraryMonitor.ReportFileSystemChanged` sur le QNAP (sinon, le scan planifié de Jellyfin trouve les fichiers).
 4. Titres d'épisodes via le fournisseur TMDB de Jellyfin.
+
+## 8. Livres, BD, comics et presse (v0.4.0, issue #16, 2026-11-03)
+
+Objectif : demander des livres comme les films et les séries.
+
+- Nouveau type `Book` (portée `Book`) : un seul type pour livres, BD, comics, mangas et presse, C411 les rangeant dans des catégories voisines (configurables, défaut `7000,7010,7020,7030`).
+- Fiches : `IProviderManager.GetRemoteSearchResults<Book, BookInfo>`, alimenté par l'extension Jellyfin **Bookshelf** (Google Books, Comic Vine) si elle est installée. Une fiche « recherche libre » (texte saisi tel quel) est toujours proposée : presse et éditions absentes des fournisseurs.
+- Recherche C411 : par titre seul (`t=search`), sans l'année (rarement présente dans les noms de releases de livres).
+- Déjà en bibliothèque : uniquement par identifiant (GoogleBooks / ComicVine / Isbn), pour ne pas bloquer à tort un titre homonyme. Disponibilité : identifiant, ou livre ajouté depuis la demande dans le dossier rangé ou portant le même titre.
+- Auto-validation : seuil `BookMaxSizeGb` (2 Go par défaut).
+- Rangement : `Livres/Titre (Année)/Titre (Année).ext` pour un fichier seul ; un pack garde les noms de fichiers, à plat. Dossier `BooksPath` (vide : bibliothèque Jellyfin de type Livres) ; facultatif.
+- Schéma SQLite v3 : colonne `BookIds` (« GoogleBooks=…;Isbn=… »).
+
+**Non vérifié à ce stade** : catégories réelles de C411 pour les livres (`t=caps`), clés exactes des identifiants posés par Bookshelf sur le serveur.

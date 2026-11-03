@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
@@ -47,7 +48,7 @@ internal sealed class LibraryWatcher : IHostedService, IDisposable
 
     private void OnItemAdded(object? sender, ItemChangeEventArgs e)
     {
-        if (e.Item is Movie or Episode)
+        if (e.Item is Movie or Episode or Book)
         {
             _timer.Change(Debounce, Timeout.InfiniteTimeSpan);
         }
