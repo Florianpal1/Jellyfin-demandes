@@ -32,7 +32,7 @@ Délais visés : accusé de réception sous 7 jours, correctif ou contournement 
 
 Concerne le code de ce dépôt :
 - les endpoints `C411Torbox/*` (contrôle des droits utilisateur / administrateur) ;
-- la page autonome `/C411Torbox/ui` et la page de configuration ;
+- la page autonome `/demandes/ui` et la page de configuration ;
 - la gestion des secrets (clés API, liens de téléchargement) ;
 - le téléchargement et le rangement des fichiers sur le NAS (depuis la 0.3.0).
 

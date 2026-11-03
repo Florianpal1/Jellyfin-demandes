@@ -85,8 +85,8 @@ L'intervalle de suivi Torbox (10 min par défaut) se règle dans Tableau de bord
 
 ## Utilisation
 
-- **Utilisateurs** : `https://<votre-jellyfin>/C411Torbox/ui` (le lien exact est affiché dans la page de configuration). La page reprend la session du client web Jellyfin ; sinon elle propose de se connecter avec le compte Jellyfin. Navigateur uniquement (pas dans les applis TV / mobiles).
-- **Administrateurs** : onglet « Administration » de la même page, ou menu **Demandes C411** du tableau de bord.
+- **Utilisateurs** : `https://<votre-jellyfin>/demandes/ui` (`/C411Torbox/ui` avant la 0.5.0) (le lien exact est affiché dans la page de configuration). La page reprend la session du client web Jellyfin ; sinon elle propose de se connecter avec le compte Jellyfin. Navigateur uniquement (pas dans les applis TV / mobiles).
+- **Administrateurs** : onglet « Administration » de la même page, ou menu **Demandes** du tableau de bord.
 
 ## Développement
 

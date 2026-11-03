@@ -58,7 +58,7 @@ Jellyfin.Plugin.C411Torbox/
 │   ├── PluginConfiguration.cs
 │   └── configPage.html/.js           # page de config admin (Tableau de bord > Extensions)
 ├── Api/
-│   ├── UiController.cs               # GET /C411Torbox/ui → page utilisateur (ressources embarquées)
+│   ├── UiController.cs               # GET /demandes/ui → page utilisateur (ressources embarquées)
 │   ├── MediaController.cs            # recherche métadonnées + état « déjà en bibliothèque »
 │   ├── SearchController.cs           # recherche torrents pour un média donné
 │   ├── RequestsController.cs         # créer une demande, mes demandes, mes notifications
@@ -171,7 +171,7 @@ Utilisation de l'**API JSON native de Prowlarr** (plus simple que le flux Torzna
 Canaux : **notifications dans la page du plugin** (cloche avec compteur, stockées en SQLite) + **webhook Discord optionnel**. (Jellyfin n'a plus de système de notifications intégré depuis la 10.9 ; à revérifier sur la 12.2.)
 
 ### 2.11 Interfaces web (FR)
-- **Page utilisateur** `/C411Torbox/ui` (page autonome, réponse Q3) : réutilise le jeton de session Jellyfin du navigateur ; si absent, redirection vers la connexion Jellyfin puis retour. Onglets : Recherche, Mes demandes, Notifications.
+- **Page utilisateur** `/demandes/ui` (page autonome, réponse Q3) : réutilise le jeton de session Jellyfin du navigateur ; si absent, redirection vers la connexion Jellyfin puis retour. Onglets : Recherche, Mes demandes, Notifications.
 - **Page admin** (dans le tableau de bord via `IHasWebPages`, et onglet de la page autonome pour les admins) : demandes en attente (média, torrent, taille, seeders, cache Torbox, demandeur), Valider / Refuser (motif) / Renvoyer, historique complet filtrable (y compris auto-validées).
 - Non disponible dans les applis natives (TV, mobile) : navigateur uniquement (accepté).
 

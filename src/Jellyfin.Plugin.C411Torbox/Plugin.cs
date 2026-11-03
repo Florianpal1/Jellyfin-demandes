@@ -50,7 +50,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             new PluginPageInfo
             {
                 Name = "C411TorboxRequests",
-                DisplayName = "Demandes C411",
+                DisplayName = "Demandes",
                 EmbeddedResourcePath = ns + ".Configuration.requestsPage.html",
                 EnableInMainMenu = true,
                 MenuIcon = "playlist_add_check",

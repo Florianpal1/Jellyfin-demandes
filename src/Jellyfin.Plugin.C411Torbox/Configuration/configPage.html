@@ -245,8 +245,8 @@
 
                 function load() {
                     Dashboard.showLoadingMsg();
-                    q('c411UiLink').href = ApiClient.getUrl('C411Torbox/ui');
-                    q('c411UiLink').textContent = ApiClient.getUrl('C411Torbox/ui');
+                    q('c411UiLink').href = ApiClient.getUrl('demandes/ui');
+                    q('c411UiLink').textContent = ApiClient.getUrl('demandes/ui');
                     ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                         textFields.forEach(function (f) { q(f).value = config[f] || ''; });
                         numberFields.forEach(function (f) { q(f).value = config[f]; });
