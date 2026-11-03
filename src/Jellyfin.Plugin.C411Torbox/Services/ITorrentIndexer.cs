@@ -18,8 +18,11 @@ public interface ITorrentIndexer
     /// <summary>Nom affiché dans les messages d'erreur.</summary>
     string DisplayName { get; }
 
-    /// <summary>Recherche les torrents d'un média (par identifiant si possible, sinon par titre).</summary>
-    Task<IReadOnlyList<TorrentResult>> SearchAsync(TorrentSearchRequest request, CancellationToken ct);
+    /// <summary>
+    /// Recherche les torrents d'un média (par identifiant si possible, sinon par titre) : renvoie les résultats
+    /// retenus par <paramref name="accept"/> pour la première requête qui en donne.
+    /// </summary>
+    Task<IReadOnlyList<TorrentResult>> SearchAsync(TorrentSearchRequest request, Func<TorrentResult, bool> accept, CancellationToken ct);
 
     /// <summary>Télécharge le .torrent (ou suit la redirection vers un lien magnet).</summary>
     Task<TorrentSource> DownloadAsync(string downloadUrl, CancellationToken ct);

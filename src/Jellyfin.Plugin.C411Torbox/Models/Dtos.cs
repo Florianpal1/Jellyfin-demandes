@@ -74,6 +74,10 @@ public class TorrentSearchRequest
         Episode = episode,
     };
 
+    /// <summary>Autres titres du média (ex. titre anglais), complétés par le serveur avant la recherche.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> AlternateNames { get; set; } = Array.Empty<string>();
+
     [JsonIgnore]
     public RequestScope Scope => Kind switch
     {
@@ -83,7 +87,7 @@ public class TorrentSearchRequest
     };
 }
 
-/// <summary>Un torrent trouvé via Prowlarr.</summary>
+/// <summary>Un torrent trouvé sur C411 (Torznab direct ou via Prowlarr).</summary>
 public class TorrentResult
 {
     /// <summary>Identifiant opaque du résultat dans le cache serveur.</summary>
@@ -114,6 +118,16 @@ public class TorrentResult
 
     [JsonIgnore]
     public string? DownloadUrl { get; set; }
+
+    /// <summary>Identifiants du média fournis par l'indexeur (s'il les renvoie).</summary>
+    [JsonIgnore]
+    public string? TmdbId { get; set; }
+
+    [JsonIgnore]
+    public string? ImdbId { get; set; }
+
+    [JsonIgnore]
+    public string? TvdbId { get; set; }
 }
 
 public class TorrentSearchResponse

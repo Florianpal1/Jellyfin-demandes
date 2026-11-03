@@ -63,8 +63,8 @@ public class TorrentSearchServiceTests
             if (url.Contains("/api/v1/search", StringComparison.Ordinal))
             {
                 return FakeHttp.Json("""
-                    [ { "guid": "g1", "title": "Populaire", "size": 1000, "seeders": 90, "leechers": 1, "downloadUrl": "http://prowlarr:9696/7/download?id=1", "protocol": "torrent" },
-                      { "guid": "g2", "title": "En cache", "size": 1000, "seeders": 3, "leechers": 0, "infoHash": "1111111111111111111111111111111111111111", "downloadUrl": "http://prowlarr:9696/7/download?id=2", "protocol": "torrent" } ]
+                    [ { "guid": "g1", "title": "Film.MULTi.1080p", "size": 1000, "seeders": 90, "leechers": 1, "downloadUrl": "http://prowlarr:9696/7/download?id=1", "protocol": "torrent" },
+                      { "guid": "g2", "title": "Film.720p", "size": 1000, "seeders": 3, "leechers": 0, "infoHash": "1111111111111111111111111111111111111111", "downloadUrl": "http://prowlarr:9696/7/download?id=2", "protocol": "torrent" } ]
                     """);
             }
 
@@ -77,12 +77,12 @@ public class TorrentSearchServiceTests
         });
         var config = new FakeConfig();
         var service = new TorrentSearchService(
-            Indexers(http, config), new TorboxClient(http, config), new FakeLibrary(), new SearchResultCache(), config, NullLogger<TorrentSearchService>.Instance);
+            Indexers(http, config), new TorboxClient(http, config), new FakeLibrary(), new SearchResultCache(), config, new FakeAliases(), NullLogger<TorrentSearchService>.Instance);
 
         var response = await service.SearchAsync(
             new TorrentSearchRequest { Kind = MediaKind.Movie, Name = "Film", ProviderIds = new() { ["Imdb"] = "tt1" } }, CancellationToken.None);
 
-        Assert.Equal(["En cache", "Populaire"], response.Results.Select(r => r.Title).ToArray());
+        Assert.Equal(["Film.720p", "Film.MULTi.1080p"], response.Results.Select(r => r.Title).ToArray());
         Assert.True(response.Results[0].IsCachedOnTorbox);
         Assert.True(response.Results[0].WouldAutoApprove);
         Assert.Equal(torrentHash, response.Results[1].InfoHash);
@@ -100,7 +100,7 @@ public class TorrentSearchServiceTests
         var http = new FakeHttp((_, _) => throw new InvalidOperationException("ne doit pas être appelé"));
         var config = new FakeConfig();
         var service = new TorrentSearchService(
-            Indexers(http, config), new TorboxClient(http, config), new FakeLibrary { MovieInLibrary = true }, new SearchResultCache(), config, NullLogger<TorrentSearchService>.Instance);
+            Indexers(http, config), new TorboxClient(http, config), new FakeLibrary { MovieInLibrary = true }, new SearchResultCache(), config, new FakeAliases(), NullLogger<TorrentSearchService>.Instance);
 
         var response = await service.SearchAsync(new TorrentSearchRequest { Kind = MediaKind.Movie, Name = "Film" }, CancellationToken.None);
 

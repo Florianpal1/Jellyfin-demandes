@@ -129,3 +129,11 @@ internal static class Bencode
         return (Encoding.ASCII.GetBytes(torrent), Encoding.ASCII.GetBytes(info));
     }
 }
+
+internal sealed class FakeAliases : ITitleAliasProvider
+{
+    public List<string> Names { get; } = new();
+
+    public Task<IReadOnlyList<string>> GetAlternateNamesAsync(Jellyfin.Plugin.C411Torbox.Models.TorrentSearchRequest request, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<string>>(Names);
+}

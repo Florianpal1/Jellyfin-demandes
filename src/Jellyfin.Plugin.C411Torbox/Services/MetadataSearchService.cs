@@ -17,7 +17,7 @@ namespace Jellyfin.Plugin.C411Torbox.Services;
 /// de métadonnées déjà configurés sur le serveur Jellyfin (TMDB ; Google Books et Comic Vine via l'extension
 /// Bookshelf pour les livres) : aucune clé supplémentaire.
 /// </summary>
-public class MetadataSearchService
+public class MetadataSearchService : ITitleAliasProvider
 {
     private readonly IProviderManager _providerManager;
     private readonly ILibraryLookup _library;
@@ -32,6 +32,46 @@ public class MetadataSearchService
 
     /// <summary>Fiche renvoyée par une recherche récente (null si inconnue ou expirée).</summary>
     public MediaSearchResult? Get(string id) => _cache.Get(id);
+
+    /// <summary>
+    /// Titre anglais du média (les fiches sont en français, les releases portent souvent le titre anglais),
+    /// lu par identifiant auprès des fournisseurs du serveur.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetAlternateNamesAsync(TorrentSearchRequest request, CancellationToken ct)
+    {
+        // Livres : pas de titre traduit fiable chez les fournisseurs.
+        var ids = LibraryLookup.FilterIds(request.ProviderIds);
+        if (ids.Count == 0 || request.Kind is not (MediaKind.Movie or MediaKind.Series))
+        {
+            return Array.Empty<string>();
+        }
+
+        IEnumerable<RemoteSearchResult> raw = request.Kind == MediaKind.Movie
+            ? await _providerManager.GetRemoteSearchResults<Movie, MovieInfo>(
+                new RemoteSearchQuery<MovieInfo>
+                {
+                    SearchInfo = new MovieInfo { Name = request.Name, Year = request.Year, ProviderIds = new(ids), MetadataLanguage = "en", MetadataCountryCode = "US" },
+                    IncludeDisabledProviders = true,
+                },
+                ct).ConfigureAwait(false)
+            : await _providerManager.GetRemoteSearchResults<Series, SeriesInfo>(
+                new RemoteSearchQuery<SeriesInfo>
+                {
+                    SearchInfo = new SeriesInfo { Name = request.Name, Year = request.Year, ProviderIds = new(ids), MetadataLanguage = "en", MetadataCountryCode = "US" },
+                    IncludeDisabledProviders = true,
+                },
+                ct).ConfigureAwait(false);
+
+        // Seules les fiches du même média (même identifiant) comptent.
+        return raw
+            .Where(r => r.ProviderIds is not null && ids.Any(kv => r.ProviderIds.TryGetValue(kv.Key, out var v)
+                && string.Equals(v?.Trim(), kv.Value, StringComparison.OrdinalIgnoreCase)))
+            .Select(r => r.Name?.Trim())
+            .OfType<string>()
+            .Where(n => n.Length > 0 && !n.Equals(request.Name.Trim(), StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
 
     public async Task<IReadOnlyList<MediaSearchResult>> SearchAsync(string query, MediaKind kind, CancellationToken ct)
     {
