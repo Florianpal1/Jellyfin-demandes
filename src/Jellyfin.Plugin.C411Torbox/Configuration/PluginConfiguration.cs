@@ -64,7 +64,7 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Copie aussi les sous-titres présents dans le torrent.</summary>
     public bool ImportSubtitles { get; set; } = true;
 
-    /// <summary>Auto-validation si le torrent est déjà en cache sur Torbox (quelle que soit la taille).</summary>
+    /// <summary>Auto-validation si le torrent est déjà en cache sur Torbox (dans la limite de la taille max du type, si elle est définie).</summary>
     public bool AutoApproveWhenCached { get; set; } = true;
 
     /// <summary>Taille max (Go) d'un film pour l'auto-validation. 0 = désactivé.</summary>

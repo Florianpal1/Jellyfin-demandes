@@ -107,12 +107,21 @@ public sealed class RequestServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task CachedTorrent_IsAutoApproved_EvenIfHuge()
+    public async Task CachedTorrent_IsAutoApproved_EvenWithoutSeeders()
     {
-        var r = await _service.CreateAsync(Alice, "alice", AddResult(80 * Gb, 0, cached: true), CancellationToken.None);
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(10 * Gb, 0, cached: true), CancellationToken.None);
 
         Assert.Equal(RequestStatus.SentToTorbox, r.Status);
         Assert.Equal(AutoApprovalReason.Cached, r.AutoApprovalReason);
+    }
+
+    [Fact]
+    public async Task HugeCachedTorrent_WaitsForAdmin()
+    {
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(80 * Gb, 50, cached: true), CancellationToken.None);
+
+        Assert.Equal(RequestStatus.Pending, r.Status);
+        Assert.Equal(0, CreateTorrentCalls);
     }
 
     [Fact]

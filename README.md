@@ -3,7 +3,7 @@
 Plugin Jellyfin **12.2** (usage privé) :
 
 - **Utilisateurs** : recherche d'un film ou d'une série (fiches TMDB via Jellyfin), choix d'un torrent C411 (API Torznab de C411 en direct, ou via Prowlarr) avec taille, seeders et leechers. Les torrents **déjà en cache Torbox** sont affichés en premier (⚡), puis les plus seedés. Demande en un clic.
-- **Administrateurs** : validation / refus des demandes. Validation **automatique** si le torrent est en cache Torbox, ou s'il est sous le seuil de taille (film / épisode / saison) avec assez de seeders.
+- **Administrateurs** : validation / refus des demandes. Validation **automatique** si le torrent est en cache Torbox et sous le seuil de taille de son type, ou s'il est sous le seuil de taille (film / épisode / saison) avec assez de seeders.
 - **Torbox** : les demandes validées y sont ajoutées directement.
 - **Téléchargement et rangement automatiques** (option, depuis la 0.3.0) : remplace l'application « RealDebrid » + Radarr / Sonarr. Une fois le torrent terminé sur Torbox, le plugin télécharge les fichiers sur le NAS (avec reprise), puis les range au format standard Radarr / Sonarr. Le média est connu d'après la fiche TMDB de la demande ; seuls les numéros d'épisode sont lus dans les noms de fichiers.
 - Suivi : progression Torbox, puis progression du téléchargement vers le NAS, passage en « Disponible » quand le média arrive dans Jellyfin, notifications (dans la page + webhook Discord optionnel).

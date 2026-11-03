@@ -9,7 +9,7 @@ public static class ApprovalRules
     private const double BytesPerGb = 1024d * 1024 * 1024;
 
     /// <summary>
-    /// 1. Déjà en cache Torbox (si activé) → auto-validé.
+    /// 1. Déjà en cache Torbox (si activé) ET taille ≤ seuil du type (seuil 0 : pas de borne) → auto-validé.
     /// 2. Taille ≤ seuil du type ET seeders ≥ minimum → auto-validé.
     /// 3. Sinon → en attente.
     /// </summary>
@@ -20,11 +20,6 @@ public static class ApprovalRules
         bool cachedOnTorbox,
         PluginConfiguration config)
     {
-        if (cachedOnTorbox && config.AutoApproveWhenCached)
-        {
-            return AutoApprovalReason.Cached;
-        }
-
         double maxGb = scope switch
         {
             RequestScope.Movie => config.MovieMaxSizeGb,
@@ -33,10 +28,16 @@ public static class ApprovalRules
             _ => 0,
         };
 
-        if (maxGb > 0
-            && sizeBytes > 0
-            && sizeBytes <= maxGb * BytesPerGb
-            && seeders >= config.MinSeedersForAutoApproval)
+        bool underMaxSize = maxGb > 0 && sizeBytes > 0 && sizeBytes <= maxGb * BytesPerGb;
+
+        // Le seuil borne aussi le cache (un torrent en cache est quand même téléchargé sur le NAS).
+        // Seuil à 0 : la règle « taille » est désactivée, le cache reste alors sans borne.
+        if (cachedOnTorbox && config.AutoApproveWhenCached && (maxGb <= 0 || underMaxSize))
+        {
+            return AutoApprovalReason.Cached;
+        }
+
+        if (underMaxSize && seeders >= config.MinSeedersForAutoApproval)
         {
             return AutoApprovalReason.Size;
         }
