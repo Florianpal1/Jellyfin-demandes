@@ -65,11 +65,17 @@ internal static class TorrentFileDownloader
         Action<HttpRequestMessage>? configure,
         CancellationToken ct)
     {
-        var url = new Uri(downloadUrl);
+        var origin = new Uri(downloadUrl);
+        var url = origin;
         for (int i = 0; i <= MaxRedirects; i++)
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            configure?.Invoke(request);
+
+            // En-têtes d'authentification (clé API Prowlarr) : jamais transmis à un autre serveur après une redirection.
+            if (SameOrigin(url, origin))
+            {
+                configure?.Invoke(request);
+            }
             using var response = await SendAsync(client, request, HttpCompletionOption.ResponseHeadersRead, sourceName, certificates, ct).ConfigureAwait(false);
 
             if ((int)response.StatusCode is >= 300 and < 400)
@@ -115,6 +121,12 @@ internal static class TorrentFileDownloader
 
         throw new HttpRequestException("Trop de redirections lors du téléchargement du .torrent.");
     }
+
+    /// <summary>Même schéma, même hôte et même port (pas de passage de https à http).</summary>
+    internal static bool SameOrigin(Uri a, Uri b)
+        => string.Equals(a.Scheme, b.Scheme, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(a.IdnHost, b.IdnHost, StringComparison.OrdinalIgnoreCase)
+            && a.Port == b.Port;
 
     /// <summary>Envoie la requête en remplaçant les erreurs réseau par un message lisible.</summary>
     public static async Task<HttpResponseMessage> SendAsync(

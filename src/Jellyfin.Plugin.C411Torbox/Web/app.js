@@ -248,13 +248,7 @@
         if (ev) ev.preventDefault();
         const m = state.media;
         if (!m) return;
-        const body = {
-            Kind: m.kind,
-            Name: m.name,
-            Year: m.year,
-            ImageUrl: m.imageUrl,
-            ProviderIds: m.providerIds || {}
-        };
+        const body = { MediaId: m.id };
         if (m.kind === 'Series') {
             body.Season = parseInt($('#seasonInput').value, 10);
             if ($('#episodeToggle').checked) body.Episode = parseInt($('#episodeInput').value, 10);
