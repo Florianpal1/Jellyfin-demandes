@@ -28,6 +28,9 @@ public sealed class RequestServiceTests : IDisposable
     private bool _torboxFails;
     private string _myList = """{ "success": true, "data": [] }""";
 
+    /// <summary>Contenu de /mylist une fois createtorrent appelé (simule un doublon détecté par Torbox).</summary>
+    private string? _myListAfterCreate;
+
     public RequestServiceTests()
     {
         _repository = new RequestRepository(_dbPath);
@@ -36,6 +39,7 @@ public sealed class RequestServiceTests : IDisposable
             var path = req.RequestUri!.AbsolutePath;
             if (path.EndsWith("/createtorrent", StringComparison.Ordinal))
             {
+                _myList = _myListAfterCreate ?? _myList;
                 return _torboxFails
                     ? FakeHttp.Json("""{ "success": false, "detail": "Limite atteinte" }""", HttpStatusCode.Forbidden)
                     : FakeHttp.Json($$"""{ "success": true, "data": { "torrent_id": 99, "hash": "{{Hash}}" } }""");
@@ -175,6 +179,36 @@ public sealed class RequestServiceTests : IDisposable
         var retried = await _service.ApproveAsync(r.Id, "admin", CancellationToken.None);
         Assert.Equal(RequestStatus.SentToTorbox, retried.Status);
         Assert.Null(retried.LastError);
+    }
+
+    [Fact]
+    public async Task TorrentAlreadyOnTorbox_IsAdopted_WithoutResending()
+    {
+        // Ajouté à la main sur Torbox (hors plugin), déjà téléchargé.
+        _myList = $$"""{ "success": true, "data": [ { "id": 555, "hash": "{{Hash.ToUpperInvariant()}}", "name": "Dune", "progress": 1, "download_finished": true } ] }""";
+
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None);
+
+        Assert.Equal(RequestStatus.CompletedOnTorbox, r.Status);
+        Assert.Equal(555, r.TorboxTorrentId);
+        Assert.Equal(1, r.TorboxProgress);
+        Assert.Equal(0, CreateTorrentCalls);
+        Assert.Contains(_notifications.Sent, n => n.UserId == Alice && n.Message.Contains("déjà sur Torbox", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task TorboxRefusesDuplicate_RequestIsAttachedToExistingTorrent()
+    {
+        // La liste ne contient pas encore le torrent au moment de la vérification, Torbox refuse le doublon.
+        _torboxFails = true;
+        _myListAfterCreate = $$"""{ "success": true, "data": [ { "id": 777, "hash": "{{Hash}}", "name": "Dune", "progress": 0.3, "download_finished": false } ] }""";
+
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None);
+
+        Assert.Equal(RequestStatus.SentToTorbox, r.Status);
+        Assert.Equal(777, r.TorboxTorrentId);
+        Assert.Equal(0.3, r.TorboxProgress);
+        Assert.Null(r.LastError);
     }
 
     [Fact]

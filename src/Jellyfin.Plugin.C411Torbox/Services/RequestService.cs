@@ -461,29 +461,89 @@ public class RequestService
         return list.DistinctBy(r => r.Id).ToList();
     }
 
+    /// <summary>Torrent du compte Torbox ayant cet infohash (null si absent, hash inconnu ou liste illisible).</summary>
+    private async Task<TorboxTorrent?> FindOnTorboxAsync(string? hash, CancellationToken ct)
+    {
+        hash = TorrentHash.Normalize(hash);
+        if (hash is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var list = await _torbox.GetMyListAsync(ct).ConfigureAwait(false);
+            return list.FirstOrDefault(t => string.Equals(t.Hash, hash, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (TorboxException ex)
+        {
+            _logger.LogWarning(ex, "Liste des torrents Torbox illisible : vérification des doublons impossible");
+            return null;
+        }
+    }
+
     /// <summary>Envoie le torrent à Torbox. Doit être appelé sous <see cref="_lock"/>.</summary>
     private async Task SendToTorboxAsync(MediaRequest request, TorrentSource? source, CancellationToken ct)
     {
         var targets = SameTorrent(request, RequestStatus.Pending, RequestStatus.Approved, RequestStatus.AutoApproved, RequestStatus.Failed);
         try
         {
-            source ??= !string.IsNullOrEmpty(request.MagnetUrl)
-                ? new TorrentSource(null, request.MagnetUrl)
-                : !string.IsNullOrEmpty(request.DownloadUrl)
-                    ? await _indexers.Current.DownloadAsync(request.DownloadUrl, ct).ConfigureAwait(false)
-                    : throw new RequestException("Aucun lien de téléchargement pour ce torrent.");
+            // Torrent déjà présent sur le compte Torbox (ajouté à la main, hors plugin) : Torbox refuse les doublons,
+            // on rattache donc la demande au torrent existant au lieu de le renvoyer.
+            var hash = request.InfoHash;
+            var existing = await FindOnTorboxAsync(hash, ct).ConfigureAwait(false);
+            if (existing is null)
+            {
+                source ??= !string.IsNullOrEmpty(request.MagnetUrl)
+                    ? new TorrentSource(null, request.MagnetUrl)
+                    : !string.IsNullOrEmpty(request.DownloadUrl)
+                        ? await _indexers.Current.DownloadAsync(request.DownloadUrl, ct).ConfigureAwait(false)
+                        : throw new RequestException("Aucun lien de téléchargement pour ce torrent.");
 
-            var result = await _torbox.CreateTorrentAsync(source, request.TorrentTitle, ct).ConfigureAwait(false);
-            var hash = result.Hash
-                ?? request.InfoHash
-                ?? (source.File is not null ? TorrentHash.FromTorrentFile(source.File) : TorrentHash.FromMagnet(source.Magnet));
+                if (hash is null)
+                {
+                    hash = source.File is not null ? TorrentHash.FromTorrentFile(source.File) : TorrentHash.FromMagnet(source.Magnet);
+                    existing = await FindOnTorboxAsync(hash, ct).ConfigureAwait(false);
+                }
+            }
 
+            var adopted = existing is not null;
+            if (existing is null)
+            {
+                try
+                {
+                    var created = await _torbox.CreateTorrentAsync(source!, request.TorrentTitle, ct).ConfigureAwait(false);
+                    hash = created.Hash ?? hash;
+                    existing = new TorboxTorrent(created.TorrentId ?? 0, hash, null, 0, null, false);
+                }
+                catch (TorboxException) when (hash is not null)
+                {
+                    // Refus de Torbox : si c'est un doublon, le torrent figure dans la liste du compte.
+                    existing = await FindOnTorboxAsync(hash, ct).ConfigureAwait(false);
+                    if (existing is null)
+                    {
+                        throw;
+                    }
+
+                    adopted = true;
+                }
+            }
+
+            if (adopted)
+            {
+                _logger.LogInformation("Demande {Id} : torrent déjà présent sur Torbox (id {TorrentId}), rattaché", request.Id, existing.Id);
+            }
+
+            var finished = existing.DownloadFinished || existing.Progress >= 1;
+            var message = adopted
+                ? "est validée : le torrent était déjà sur Torbox, il est suivi par le plugin."
+                : "est validée et envoyée à Torbox.";
             foreach (var r in targets)
             {
-                r.Status = RequestStatus.SentToTorbox;
-                r.TorboxTorrentId = result.TorrentId;
-                r.TorboxProgress = 0;
-                r.InfoHash ??= hash;
+                r.Status = finished ? RequestStatus.CompletedOnTorbox : RequestStatus.SentToTorbox;
+                r.TorboxTorrentId = existing.Id > 0 ? existing.Id : null;
+                r.TorboxProgress = Math.Clamp(existing.Progress, 0, 1);
+                r.InfoHash ??= existing.Hash ?? hash;
                 r.LastError = null;
                 if (r.Id != request.Id && r.ReviewedBy is null)
                 {
@@ -492,11 +552,12 @@ public class RequestService
                 }
 
                 _repository.Update(r);
-                await _notifications.NotifyUserAsync(r.UserId, $"Votre demande « {Describe(r)} » est validée et envoyée à Torbox.", r.Id, ct).ConfigureAwait(false);
+                await _notifications.NotifyUserAsync(r.UserId, $"Votre demande « {Describe(r)} » {message}", r.Id, ct).ConfigureAwait(false);
             }
         }
-        catch (Exception ex) when (ex is TorboxException or HttpRequestException or RequestException or InvalidOperationException or TaskCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
+            // Toute erreur d'envoi passe la demande « En échec » (relançable) : jamais d'erreur 500 côté utilisateur.
             _logger.LogError(ex, "Échec de l'envoi à Torbox de la demande {Id}", request.Id);
             foreach (var r in targets)
             {
