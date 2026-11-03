@@ -1,0 +1,42 @@
+# Compile le plugin et lance les tests à chaque pull request (et à chaque push sur main).
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restauration
+        run: dotnet restore Jellyfin.Plugin.C411Torbox.slnx
+
+      - name: Compilation
+        run: dotnet build Jellyfin.Plugin.C411Torbox.slnx --no-restore --configuration Release
+
+      - name: Tests
+        run: dotnet test Jellyfin.Plugin.C411Torbox.slnx --no-build --configuration Release --logger "trx;LogFileName=resultats.trx" --results-directory TestResults
+
+      - name: Résultats des tests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultats-tests
+          path: TestResults
+          if-no-files-found: ignore
