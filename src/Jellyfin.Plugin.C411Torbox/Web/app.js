@@ -315,11 +315,16 @@
 
     // ---------- mes demandes ----------
 
-    async function loadMine() {
+    // refresh = true : le serveur relit d'abord Torbox et la bibliothèque (sans attendre la tâche planifiée).
+    async function loadMine(refresh) {
         const tbody = $('#mineTable tbody');
-        tbody.replaceChildren(el('tr', null, el('td', { colspan: 5, class: 'spinner' }, 'Chargement…')));
+        const btn = $('#mineRefresh');
+        btn.disabled = true;
+        tbody.replaceChildren(el('tr', null, el('td', { colspan: 5, class: 'spinner' }, refresh ? 'Actualisation…' : 'Chargement…')));
         try {
-            const list = await api('GET', 'C411Torbox/Requests/Mine');
+            const list = refresh
+                ? await api('POST', 'C411Torbox/Requests/Mine/Refresh')
+                : await api('GET', 'C411Torbox/Requests/Mine');
             tbody.replaceChildren();
             if (!list.length) tbody.append(el('tr', null, el('td', { colspan: 5, class: 'muted' }, 'Aucune demande pour l\'instant.')));
             for (const r of list) {
@@ -332,6 +337,8 @@
             }
         } catch (e) {
             tbody.replaceChildren(el('tr', null, el('td', { colspan: 5, class: 'error' }, e.message)));
+        } finally {
+            btn.disabled = false;
         }
     }
 
@@ -466,6 +473,7 @@
         });
         $('#adminFilter').addEventListener('change', loadAdmin);
         $('#adminRefresh').addEventListener('click', loadAdmin);
+        $('#mineRefresh').addEventListener('click', () => loadMine(true));
         document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
         start();
         setInterval(() => { if (state.me) { loadNotifications(false); updatePendingBadge(null); } }, 60000);

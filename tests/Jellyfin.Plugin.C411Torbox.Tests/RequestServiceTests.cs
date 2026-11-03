@@ -210,6 +210,23 @@ public sealed class RequestServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task RefreshNow_UpdatesStatuses_AndIgnoresRapidRepeats()
+    {
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None);
+        _myList = $$"""{ "success": true, "data": [ { "id": 99, "hash": "{{Hash}}", "progress": 1, "download_finished": true } ] }""";
+
+        Assert.True(await _service.RefreshNowAsync(CancellationToken.None));
+        Assert.Equal(RequestStatus.CompletedOnTorbox, _repository.Get(r.Id)!.Status);
+
+        // Deuxième clic dans les 30 s : ni Torbox ni la bibliothèque ne sont relus.
+        _library.MovieInLibrary = true;
+        var calls = _http.Calls.Count;
+        Assert.False(await _service.RefreshNowAsync(CancellationToken.None));
+        Assert.Equal(calls, _http.Calls.Count);
+        Assert.Equal(RequestStatus.CompletedOnTorbox, _repository.Get(r.Id)!.Status);
+    }
+
+    [Fact]
     public async Task StatusSync_ThenLibraryArrival_MakesRequestAvailable()
     {
         var r = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None);

@@ -48,6 +48,43 @@ public class RequestService
     // Sérialise les transitions d'état : évite par exemple un double envoi si deux admins valident en même temps.
     private readonly SemaphoreSlim _lock = new(1, 1);
 
+    private readonly object _manualRefreshGate = new();
+    private DateTime _lastManualRefresh = DateTime.MinValue;
+
+    /// <summary>Délai minimal entre deux actualisations manuelles (tous utilisateurs confondus) : ménage l'API Torbox.</summary>
+    public static readonly TimeSpan ManualRefreshInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Actualisation demandée depuis l'interface (bouton « Actualiser ») : même travail que la tâche planifiée
+    /// (progression Torbox puis arrivée dans la bibliothèque), au plus une fois toutes les 30 s.
+    /// Renvoie false si l'actualisation a été ignorée (trop rapprochée) ; Torbox injoignable n'empêche pas la vérification de la bibliothèque.
+    /// </summary>
+    public async Task<bool> RefreshNowAsync(CancellationToken ct)
+    {
+        lock (_manualRefreshGate)
+        {
+            var now = DateTime.UtcNow;
+            if (now - _lastManualRefresh < ManualRefreshInterval)
+            {
+                return false;
+            }
+
+            _lastManualRefresh = now;
+        }
+
+        try
+        {
+            await RefreshTorboxStatusAsync(ct).ConfigureAwait(false);
+        }
+        catch (TorboxException ex)
+        {
+            _logger.LogWarning(ex, "Actualisation manuelle : lecture des statuts Torbox impossible");
+        }
+
+        await CheckAvailabilityAsync(ct).ConfigureAwait(false);
+        return true;
+    }
+
     public RequestService(
         RequestRepository repository,
         SearchResultCache cache,
