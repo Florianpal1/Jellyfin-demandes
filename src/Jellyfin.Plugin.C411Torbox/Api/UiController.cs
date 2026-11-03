@@ -12,7 +12,7 @@ namespace Jellyfin.Plugin.C411Torbox.Api;
 /// </summary>
 [ApiController]
 [AllowAnonymous]
-[Route("C411Torbox/ui")]
+[Route("demandes/ui")]
 public class UiController : ControllerBase
 {
     private static readonly Dictionary<string, string> Files = new(StringComparer.OrdinalIgnoreCase)

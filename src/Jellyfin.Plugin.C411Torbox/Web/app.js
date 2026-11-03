@@ -1,4 +1,4 @@
-/* Page autonome « Demandes C411 » — servie par le plugin Jellyfin C411 Torbox. */
+/* Page autonome « Demandes » — servie par le plugin Jellyfin C411 Torbox. */
 (function () {
     'use strict';
 
@@ -9,7 +9,7 @@
 
     // Racine du serveur Jellyfin (gère une éventuelle « URL de base »).
     const path = window.location.pathname;
-    const BASE = path.substring(0, path.toLowerCase().indexOf('/c411torbox/ui'));
+    const BASE = path.substring(0, path.toLowerCase().indexOf('/demandes/ui'));
 
     const STATUS_LABELS = {
         Pending: 'En attente de validation',
@@ -257,7 +257,7 @@
         const info = $('#torrentInfo');
         const tbody = $('#torrentTable tbody');
         $('#torrentTable').hidden = true;
-        info.replaceChildren(el('div', { class: 'spinner' }, 'Recherche des torrents sur C411…'));
+        info.replaceChildren(el('div', { class: 'spinner' }, 'Recherche des torrents…'));
         try {
             const res = await api('POST', 'C411Torbox/Torrents/Search', body);
             info.replaceChildren();
@@ -270,7 +270,7 @@
             }
             if (res.warning) info.append(el('div', { class: 'notice warn' }, res.warning));
             if (!res.results.length) {
-                info.append(el('p', { class: 'muted' }, 'Aucun torrent trouvé sur C411.'));
+                info.append(el('p', { class: 'muted' }, 'Aucun torrent trouvé.'));
                 return;
             }
             tbody.replaceChildren();
