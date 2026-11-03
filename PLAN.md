@@ -125,7 +125,7 @@ Notifications
 
 ### 2.5 Règles d'auto-validation (réponse Q7)
 Évaluées dans cet ordre, côté serveur, avec des données relues côté serveur (jamais celles envoyées par le navigateur) :
-1. Torrent **déjà en cache Torbox** → **auto-validé** (quelle que soit la taille), motif « Cache ».
+1. Torrent **déjà en cache Torbox** et **taille ≤ seuil** du type (seuil à 0 : pas de borne) → **auto-validé** (quels que soient les seeders), motif « Cache ».
 2. Sinon, si **taille ≤ seuil** du type (film / épisode / pack de saison) **et seeders ≥ minimum** → **auto-validé**, motif « Taille ».
 3. Sinon → **En attente** de validation admin.
 

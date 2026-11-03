@@ -18,11 +18,29 @@ public class ApprovalRulesTests
     };
 
     [Theory]
-    [InlineData(RequestScope.Movie, 100, 0)]
-    [InlineData(RequestScope.Episode, 100, 0)]
-    [InlineData(RequestScope.Season, 500, 0)]
-    public void Cached_IsAutoApproved_WhateverSizeAndSeeders(RequestScope scope, long sizeGb, int seeders)
+    [InlineData(RequestScope.Movie, 15, 0)]
+    [InlineData(RequestScope.Episode, 5, 0)]
+    [InlineData(RequestScope.Season, 30, 0)]
+    public void Cached_UnderThreshold_IsAutoApproved_WhateverSeeders(RequestScope scope, long sizeGb, int seeders)
         => Assert.Equal(AutoApprovalReason.Cached, ApprovalRules.Evaluate(scope, sizeGb * Gb, seeders, true, Config));
+
+    [Theory]
+    [InlineData(RequestScope.Movie, 16)]
+    [InlineData(RequestScope.Episode, 6)]
+    [InlineData(RequestScope.Season, 31)]
+    public void Cached_OverThreshold_IsNotAutoApproved(RequestScope scope, long sizeGb)
+        => Assert.Equal(AutoApprovalReason.None, ApprovalRules.Evaluate(scope, sizeGb * Gb, 100, true, Config));
+
+    [Fact]
+    public void Cached_UnknownSize_IsNotAutoApproved_WhenThresholdSet()
+        => Assert.Equal(AutoApprovalReason.None, ApprovalRules.Evaluate(RequestScope.Movie, 0, 100, true, Config));
+
+    [Fact]
+    public void Cached_ZeroThreshold_IsAutoApproved_WhateverSize()
+    {
+        var cfg = new PluginConfiguration { AutoApproveWhenCached = true, MovieMaxSizeGb = 0, MinSeedersForAutoApproval = 5 };
+        Assert.Equal(AutoApprovalReason.Cached, ApprovalRules.Evaluate(RequestScope.Movie, 100 * Gb, 0, true, cfg));
+    }
 
     [Fact]
     public void Cached_IsNotAutoApproved_WhenOptionDisabled()

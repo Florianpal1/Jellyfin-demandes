@@ -148,7 +148,7 @@
                                 <input id="AutoApproveWhenCached" type="checkbox" is="emby-checkbox" />
                                 <span>Valider automatiquement si le torrent est déjà en cache Torbox</span>
                             </label>
-                            <div class="fieldDescription checkboxFieldDescription">Quelle que soit sa taille.</div>
+                            <div class="fieldDescription checkboxFieldDescription">S'il ne dépasse pas la taille max de son type ci-dessous, quels que soient ses seeders (taille max à 0 : sans limite).</div>
                         </div>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="MovieMaxSizeGb">Taille max d'un film (Go)</label>
@@ -161,7 +161,7 @@
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="SeasonMaxSizeGb">Taille max d'un pack de saison (Go)</label>
                             <input id="SeasonMaxSizeGb" type="number" min="0" step="0.1" is="emby-input" />
-                            <div class="fieldDescription">0 = jamais de validation automatique par la taille pour ce type.</div>
+                            <div class="fieldDescription">0 = jamais de validation automatique par la taille pour ce type, et pas de limite pour un torrent en cache Torbox.</div>
                         </div>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="MinSeedersForAutoApproval">Seeders minimum</label>
