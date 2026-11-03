@@ -119,6 +119,14 @@ public class UserController : C411TorboxControllerBase
     [HttpGet("Requests/Mine")]
     public ActionResult MyRequests() => JsonOk(_repository.GetByUser(CurrentUserId));
 
+    /// <summary>Met à jour les statuts (Torbox, bibliothèque) sans attendre la tâche planifiée, puis renvoie mes demandes.</summary>
+    [HttpPost("Requests/Mine/Refresh")]
+    public async Task<ActionResult> RefreshMyRequests(CancellationToken ct)
+    {
+        await _requests.RefreshNowAsync(ct).ConfigureAwait(false);
+        return JsonOk(_repository.GetByUser(CurrentUserId));
+    }
+
     [HttpGet("Notifications")]
     public ActionResult Notifications() => JsonOk(_repository.GetNotifications(CurrentUserId, IsAdmin));
 
