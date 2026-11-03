@@ -114,6 +114,11 @@ public class UserController : C411TorboxControllerBase
         {
             return ErrorResult(ex.StatusCode, ex.Message);
         }
+        catch (Exception ex) when (ex is TorboxException or HttpRequestException)
+        {
+            _logger.LogWarning(ex, "Création de demande en échec");
+            return ErrorResult(StatusCodes.Status502BadGateway, ex.Message);
+        }
     }
 
     [HttpGet("Requests/Mine")]
