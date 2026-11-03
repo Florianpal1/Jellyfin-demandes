@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Concurrent;
-using System.Security.Cryptography;
 using Jellyfin.Plugin.C411Torbox.Models;
 
 namespace Jellyfin.Plugin.C411Torbox.Services;
@@ -11,13 +9,15 @@ public sealed record CachedResult(TorrentResult Result, TorrentSearchRequest Con
 /// <summary>
 /// Cache des résultats de recherche. Une demande ne référence qu'un identifiant opaque :
 /// taille, seeders, hash et état du cache Torbox sont relus ici, jamais fournis par le navigateur.
+/// Les .torrent gardés pour l'envoi à Torbox comptent dans la limite de mémoire.
 /// </summary>
-public class SearchResultCache
+public class SearchResultCache : OpaqueCache<CachedResult>
 {
-    private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(30);
+    public const int MaxEntries = 5000;
 
-    private readonly ConcurrentDictionary<string, (CachedResult Entry, DateTime Expires)> _entries = new();
-    private readonly TimeProvider _time;
+    public const long MaxTorrentBytes = 256L * 1024 * 1024;
+
+    private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(30);
 
     public SearchResultCache()
         : this(TimeProvider.System)
@@ -25,37 +25,28 @@ public class SearchResultCache
     }
 
     public SearchResultCache(TimeProvider time)
+        : base(time, Lifetime, MaxEntries, MaxTorrentBytes, e => e.Source?.File?.Length ?? 0)
     {
-        _time = time;
+    }
+}
+
+/// <summary>
+/// Fiches médias renvoyées par la recherche de métadonnées. La recherche de torrents ne reçoit que
+/// l'identifiant de la fiche : titre, année, identifiants TMDB / IMDb et type viennent du serveur.
+/// </summary>
+public class MediaResultCache : OpaqueCache<MediaSearchResult>
+{
+    public const int MaxEntries = 5000;
+
+    private static readonly TimeSpan Lifetime = TimeSpan.FromHours(2);
+
+    public MediaResultCache()
+        : this(TimeProvider.System)
+    {
     }
 
-    public string Add(CachedResult entry)
+    public MediaResultCache(TimeProvider time)
+        : base(time, Lifetime, MaxEntries)
     {
-        Purge();
-        var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(12));
-        _entries[id] = (entry, _time.GetUtcNow().UtcDateTime + Lifetime);
-        return id;
-    }
-
-    public CachedResult? Get(string id)
-    {
-        if (_entries.TryGetValue(id, out var e) && e.Expires > _time.GetUtcNow().UtcDateTime)
-        {
-            return e.Entry;
-        }
-
-        return null;
-    }
-
-    private void Purge()
-    {
-        var now = _time.GetUtcNow().UtcDateTime;
-        foreach (var kv in _entries)
-        {
-            if (kv.Value.Expires <= now)
-            {
-                _entries.TryRemove(kv.Key, out _);
-            }
-        }
     }
 }

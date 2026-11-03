@@ -186,6 +186,25 @@ public sealed class ImportServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ExistingDifferentFile_IsNeverOverwritten()
+    {
+        _files = """[ { "id": 1, "name": "Dune.2021.MULTi.1080p.BluRay.x264.mkv", "size": 5000 } ]""";
+        var folder = Path.Combine(_dir, "Films", "Dune (2021) [tmdbid-438631]");
+        var video = Path.Combine(folder, "Dune (2021) Bluray-1080p.mkv");
+        Directory.CreateDirectory(folder);
+        File.WriteAllBytes(video, new byte[] { 1, 2, 3 });
+        var r = AddCompleted(MediaKind.Movie, RequestScope.Movie, "Dune", 2021);
+
+        await _import.ProcessNextAsync(CancellationToken.None);
+
+        Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(video));
+        var saved = _repository.Get(r.Id)!;
+        Assert.Equal(RequestStatus.ImportFailed, saved.Status);
+        Assert.Contains("n'est pas écrasé", saved.LastError, StringComparison.Ordinal);
+        Assert.Empty(Calls("/requestdl"));
+    }
+
+    [Fact]
     public async Task DeleteFromTorbox_WhenEnabled()
     {
         _config.Current.DeleteFromTorboxAfterImport = true;

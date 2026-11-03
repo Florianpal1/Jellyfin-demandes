@@ -246,6 +246,7 @@ public class ImportService
 
         var plan = ImportPlanner.Plan(request, torrent.Files, target);
         EnsureInside(target.Folder, plan);
+        EnsureNoOverwrite(plan);
         EnsureFreeSpace(target.Folder, root, plan);
         return (target.Folder, plan, torrent.Id);
     }
@@ -259,6 +260,21 @@ public class ImportService
             if (!Path.GetFullPath(item.Destination).StartsWith(baseDir, StringComparison.Ordinal))
             {
                 throw new ImportException($"Chemin de destination refusé : {item.Destination}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Un fichier différent existe déjà à la destination : on ne l'écrase jamais (un fichier identique,
+    /// de même taille, est considéré comme déjà rangé).
+    /// </summary>
+    private static void EnsureNoOverwrite(ImportPlan plan)
+    {
+        foreach (var item in plan.Items)
+        {
+            if (File.Exists(item.Destination) && new FileInfo(item.Destination).Length != item.File.Size)
+            {
+                throw new ImportException($"Un autre fichier existe déjà à « {item.Destination} » : il n'est pas écrasé. Déplacez-le puis relancez.");
             }
         }
     }

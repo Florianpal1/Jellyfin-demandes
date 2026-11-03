@@ -74,6 +74,8 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
             return new RequestRepository(Path.Combine(paths.DataPath, "c411torbox", "requests.db"));
         });
         serviceCollection.AddSingleton<SearchResultCache>();
+        serviceCollection.AddSingleton<MediaResultCache>();
+        serviceCollection.AddSingleton<SearchRateLimiter>();
         serviceCollection.AddSingleton<ProwlarrClient>();
         serviceCollection.AddSingleton<TorznabClient>();
         serviceCollection.AddSingleton<IndexerProvider>();

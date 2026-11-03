@@ -7,6 +7,9 @@ namespace Jellyfin.Plugin.C411Torbox.Models;
 /// <summary>Fiche de média issue des fournisseurs de métadonnées Jellyfin.</summary>
 public class MediaSearchResult
 {
+    /// <summary>Identifiant opaque de la fiche dans le cache serveur (à renvoyer pour la recherche de torrents).</summary>
+    public string Id { get; set; } = string.Empty;
+
     public MediaKind Kind { get; set; }
 
     public string Name { get; set; } = string.Empty;
@@ -23,7 +26,19 @@ public class MediaSearchResult
     public bool InLibrary { get; set; }
 }
 
-/// <summary>Ce que l'utilisateur veut obtenir (envoyé par le navigateur pour lancer la recherche de torrents).</summary>
+/// <summary>Recherche de torrents envoyée par le navigateur : la fiche n'est référencée que par son identifiant.</summary>
+public class TorrentSearchBody
+{
+    public string MediaId { get; set; } = string.Empty;
+
+    /// <summary>Numéro de saison (séries uniquement).</summary>
+    public int? Season { get; set; }
+
+    /// <summary>Numéro d'épisode (null = pack de saison).</summary>
+    public int? Episode { get; set; }
+}
+
+/// <summary>Ce que l'utilisateur veut obtenir (construit côté serveur depuis la fiche en cache).</summary>
 public class TorrentSearchRequest
 {
     public MediaKind Kind { get; set; }
@@ -41,6 +56,18 @@ public class TorrentSearchRequest
 
     /// <summary>Numéro d'épisode (null = pack de saison).</summary>
     public int? Episode { get; set; }
+
+    /// <summary>Recherche pour une fiche du cache serveur : seuls saison et épisode viennent du navigateur.</summary>
+    public static TorrentSearchRequest From(MediaSearchResult media, int? season, int? episode) => new()
+    {
+        Kind = media.Kind,
+        Name = media.Name,
+        Year = media.Year,
+        ImageUrl = media.ImageUrl,
+        ProviderIds = new Dictionary<string, string>(media.ProviderIds, StringComparer.OrdinalIgnoreCase),
+        Season = season,
+        Episode = episode,
+    };
 
     [JsonIgnore]
     public RequestScope Scope => Kind == MediaKind.Movie

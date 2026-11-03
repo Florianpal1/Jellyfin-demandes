@@ -46,6 +46,8 @@ public class MediaRequest
 
     public string? InfoHash { get; set; }
 
+    /// <summary>Identifiant de l'indexeur (peut être un lien avec passkey ou clé API : jamais exposé au navigateur).</summary>
+    [JsonIgnore]
     public string? ProwlarrGuid { get; set; }
 
     /// <summary>Lien magnet (peut contenir la passkey : jamais exposé au navigateur).</summary>

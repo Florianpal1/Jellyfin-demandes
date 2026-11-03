@@ -23,6 +23,7 @@ public class UserController : C411TorboxControllerBase
     private readonly TorrentSearchService _search;
     private readonly RequestService _requests;
     private readonly RequestRepository _repository;
+    private readonly SearchRateLimiter _rateLimiter;
     private readonly ILogger<UserController> _logger;
 
     public UserController(
@@ -30,12 +31,14 @@ public class UserController : C411TorboxControllerBase
         TorrentSearchService search,
         RequestService requests,
         RequestRepository repository,
+        SearchRateLimiter rateLimiter,
         ILogger<UserController> logger)
     {
         _metadata = metadata;
         _search = search;
         _requests = requests;
         _repository = repository;
+        _rateLimiter = rateLimiter;
         _logger = logger;
     }
 
@@ -57,11 +60,23 @@ public class UserController : C411TorboxControllerBase
 
     /// <summary>Recherche des torrents C411 pour un média (film, saison ou épisode).</summary>
     [HttpPost("Torrents/Search")]
-    public async Task<ActionResult> SearchTorrents([FromBody] TorrentSearchRequest request, CancellationToken ct)
+    public async Task<ActionResult> SearchTorrents([FromBody] TorrentSearchBody body, CancellationToken ct)
     {
+        // Fiche relue côté serveur : titre, identifiants et type ne sont jamais fournis par le navigateur.
+        var media = _metadata.Get(body.MediaId ?? string.Empty);
+        if (media is null)
+        {
+            return ErrorResult(StatusCodes.Status410Gone, "Cette fiche a expiré : relancez la recherche du titre.");
+        }
+
+        if (!_rateLimiter.TryAcquire(CurrentUserId))
+        {
+            return ErrorResult(StatusCodes.Status429TooManyRequests, "Trop de recherches : patientez une minute.");
+        }
+
         try
         {
-            return JsonOk(await _search.SearchAsync(request, ct).ConfigureAwait(false));
+            return JsonOk(await _search.SearchAsync(TorrentSearchRequest.From(media, body.Season, body.Episode), ct).ConfigureAwait(false));
         }
         catch (ArgumentException ex)
         {

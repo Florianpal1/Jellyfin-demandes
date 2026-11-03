@@ -43,7 +43,7 @@ public class FileDownloader
         if (expectedSize > 0 && existing == expectedSize)
         {
             onBytes(existing);
-            File.Move(part, destination, overwrite: true);
+            File.Move(part, destination, overwrite: false);
             return;
         }
 
@@ -105,6 +105,6 @@ public class FileDownloader
             }
         }
 
-        File.Move(part, destination, overwrite: true);
+        File.Move(part, destination, overwrite: false);
     }
 }

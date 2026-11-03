@@ -19,12 +19,17 @@ public class MetadataSearchService
 {
     private readonly IProviderManager _providerManager;
     private readonly ILibraryLookup _library;
+    private readonly MediaResultCache _cache;
 
-    public MetadataSearchService(IProviderManager providerManager, ILibraryLookup library)
+    public MetadataSearchService(IProviderManager providerManager, ILibraryLookup library, MediaResultCache cache)
     {
         _providerManager = providerManager;
         _library = library;
+        _cache = cache;
     }
+
+    /// <summary>Fiche renvoyée par une recherche récente (null si inconnue ou expirée).</summary>
+    public MediaSearchResult? Get(string id) => _cache.Get(id);
 
     public async Task<IReadOnlyList<MediaSearchResult>> SearchAsync(string query, MediaKind kind, CancellationToken ct)
     {
@@ -58,7 +63,7 @@ public class MetadataSearchService
                 continue;
             }
 
-            results.Add(new MediaSearchResult
+            var media = new MediaSearchResult
             {
                 Kind = kind,
                 Name = r.Name ?? string.Empty,
@@ -67,7 +72,9 @@ public class MetadataSearchService
                 ImageUrl = r.ImageUrl,
                 ProviderIds = ids,
                 InLibrary = kind == MediaKind.Movie ? _library.IsMovieInLibrary(ids) : _library.IsSeriesInLibrary(ids),
-            });
+            };
+            media.Id = _cache.Add(media);
+            results.Add(media);
         }
 
         return results;
