@@ -287,7 +287,7 @@ Fonctionnement :
 3. Scan ciblé déclenché par `ILibraryMonitor.ReportFileSystemChanged` sur le QNAP (sinon, le scan planifié de Jellyfin trouve les fichiers).
 4. Titres d'épisodes via le fournisseur TMDB de Jellyfin.
 
-## 8. Livres, BD, comics et presse (issue #16, 2026-11-03)
+## 8. Livres, BD, comics et presse (v0.4.0, issue #16, 2026-11-03)
 
 Objectif : demander des livres comme les films et les séries.
 

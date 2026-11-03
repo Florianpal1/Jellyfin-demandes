@@ -2,7 +2,7 @@
 
 Plugin Jellyfin **12.2** (usage privé) :
 
-- **Utilisateurs** : recherche d'un film, d'une série (fiches TMDB via Jellyfin) ou d'un **livre, d'une BD, d'un comics ou d'un journal** (fiches Google Books / Comic Vine si l'extension Jellyfin *Bookshelf* est installée, sinon recherche du titre saisi), choix d'un torrent C411 (API Torznab de C411 en direct, ou via Prowlarr) avec taille, seeders et leechers. Les torrents **déjà en cache Torbox** sont affichés en premier (⚡), puis les plus seedés. Demande en un clic.
+- **Utilisateurs** : recherche d'un film, d'une série (fiches TMDB via Jellyfin) ou, depuis la 0.4.0, d'un **livre, d'une BD, d'un comics ou d'un journal** (fiches Google Books / Comic Vine si l'extension Jellyfin *Bookshelf* est installée, sinon recherche du titre saisi), choix d'un torrent C411 (API Torznab de C411 en direct, ou via Prowlarr) avec taille, seeders et leechers. Les torrents **déjà en cache Torbox** sont affichés en premier (⚡), puis les plus seedés. Demande en un clic.
 - **Administrateurs** : validation / refus des demandes. Validation **automatique** si le torrent est en cache Torbox et sous le seuil de taille de son type, ou s'il est sous le seuil de taille (film / épisode / saison / livre) avec assez de seeders.
 - **Torbox** : les demandes validées y sont ajoutées directement.
 - **Téléchargement et rangement automatiques** (option, depuis la 0.3.0) : remplace l'application « RealDebrid » + Radarr / Sonarr. Une fois le torrent terminé sur Torbox, le plugin télécharge les fichiers sur le NAS (avec reprise), puis les range au format standard Radarr / Sonarr. Le média est connu d'après la fiche TMDB de la demande ; seuls les numéros d'épisode sont lus dans les noms de fichiers.
