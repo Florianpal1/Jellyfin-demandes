@@ -22,7 +22,8 @@ public interface ILibraryRefresher
 /// Remplace l'application « RealDebrid » + Radarr / Sonarr : télécharge depuis Torbox les fichiers des
 /// demandes terminées, puis les range dans la bibliothèque avec le nommage standard Radarr / Sonarr
 /// (livres : un dossier « Titre (Année) » par demande).
-/// Une seule demande (un seul torrent) est traitée à la fois.
+/// Plusieurs torrents, et plusieurs fichiers d'un même torrent, peuvent être téléchargés en parallèle :
+/// le nombre total de téléchargements simultanés est borné par <see cref="ParallelDownloads"/>.
 /// </summary>
 public class ImportService
 {
@@ -43,6 +44,7 @@ public class ImportService
     private readonly INotificationService _notifications;
     private readonly IConfigProvider _config;
     private readonly ILogger<ImportService> _logger;
+    private readonly DownloadGate _gate;
 
     public ImportService(
         RequestRepository repository,
@@ -66,9 +68,13 @@ public class ImportService
         _notifications = notifications;
         _config = config;
         _logger = logger;
+        _gate = new DownloadGate(() => ParallelDownloads);
     }
 
     public bool Enabled => _config.Current.AutoImportEnabled;
+
+    /// <summary>Nombre max de fichiers téléchargés en même temps, tous imports confondus (1 à 10).</summary>
+    public int ParallelDownloads => Math.Clamp(_config.Current.MaxParallelDownloads, 1, 10);
 
     /// <summary>Dossier racine des films, séries ou livres : réglage du plugin, sinon première bibliothèque Jellyfin du bon type.</summary>
     public string? ResolveRoot(MediaKind kind)
@@ -85,9 +91,25 @@ public class ImportService
     /// <summary>Importe la plus ancienne demande terminée sur Torbox. Renvoie false s'il n'y avait rien à faire.</summary>
     public async Task<bool> ProcessNextAsync(CancellationToken ct)
     {
-        if (!Enabled)
+        var import = await TryStartNextAsync(ct).ConfigureAwait(false);
+        if (import is null)
         {
             return false;
+        }
+
+        await import.ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Réserve la plus ancienne demande terminée sur Torbox (passée en « Importing ») et lance son import
+    /// en arrière-plan. Renvoie la tâche de l'import, ou null s'il n'y avait rien à faire.
+    /// </summary>
+    public async Task<Task?> TryStartNextAsync(CancellationToken ct)
+    {
+        if (!Enabled)
+        {
+            return null;
         }
 
         var next = _repository.GetActive()
@@ -96,7 +118,7 @@ public class ImportService
             .FirstOrDefault();
         if (next is null)
         {
-            return false;
+            return null;
         }
 
         // Le média est peut-être déjà arrivé autrement (ancienne application de récupération) : rien à télécharger.
@@ -104,20 +126,20 @@ public class ImportService
         next = _repository.Get(next.Id);
         if (next is null || next.Status != RequestStatus.CompletedOnTorbox)
         {
-            return true;
+            return Task.CompletedTask;
         }
 
-        await ImportAsync(next, ct).ConfigureAwait(false);
-        return true;
+        var group = await ClaimAsync(next, ct).ConfigureAwait(false);
+        return group.Count == 0 ? Task.CompletedTask : Task.Run(() => ImportAsync(group, ct), CancellationToken.None);
     }
 
     private static bool SameTorrent(MediaRequest a, MediaRequest b)
         => (a.TorboxTorrentId.HasValue && a.TorboxTorrentId == b.TorboxTorrentId)
             || (a.InfoHash is not null && string.Equals(a.InfoHash, b.InfoHash, StringComparison.OrdinalIgnoreCase));
 
-    private async Task ImportAsync(MediaRequest first, CancellationToken ct)
-    {
-        var group = await _requests.UpdateActiveAsync(
+    /// <summary>Passe en « Importing » les demandes de ce torrent (sous verrou : un même torrent n'est jamais importé deux fois).</summary>
+    private Task<IReadOnlyList<MediaRequest>> ClaimAsync(MediaRequest first, CancellationToken ct)
+        => _requests.UpdateActiveAsync(
             r => r.Status == RequestStatus.CompletedOnTorbox && SameTorrent(r, first),
             r =>
             {
@@ -125,12 +147,10 @@ public class ImportService
                 r.ImportProgress = 0;
                 r.LastError = null;
             },
-            ct).ConfigureAwait(false);
-        if (group.Count == 0)
-        {
-            return;
-        }
+            ct);
 
+    private async Task ImportAsync(IReadOnlyList<MediaRequest> group, CancellationToken ct)
+    {
         // La demande la plus large guide le choix des fichiers (pack de saison avant épisode seul).
         var primary = group.OrderBy(r => r.Scope switch { RequestScope.Season => 0, RequestScope.Episode => 1, _ => 2 }).First();
         bool IsMine(MediaRequest r) => r.Status == RequestStatus.Importing && SameTorrent(r, primary);
@@ -327,56 +347,61 @@ public class ImportService
     private async Task DownloadAllAsync(MediaRequest primary, ImportPlan plan, long torrentId, Func<MediaRequest, bool> isMine, CancellationToken ct)
     {
         long total = Math.Max(1, plan.TotalBytes);
-        long done = 0;
+        var items = plan.Items;
+        var bytes = new long[items.Count];
         var clock = Stopwatch.StartNew();
-        var lastReport = TimeSpan.Zero;
+        long lastReportTicks = 0;
 
-        foreach (var item in plan.Items)
+        void OnBytes(int index, long written)
         {
-            if (File.Exists(item.Destination) && item.File.Size > 0 && new FileInfo(item.Destination).Length == item.File.Size)
+            Interlocked.Exchange(ref bytes[index], written);
+            long now = clock.Elapsed.Ticks;
+            long last = Interlocked.Read(ref lastReportTicks);
+            if (now - last < ProgressInterval.Ticks || Interlocked.CompareExchange(ref lastReportTicks, now, last) != last)
             {
-                done += item.File.Size;
-                continue;
+                return;
             }
 
-            long current = 0;
+            long done = 0;
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                done += Interlocked.Read(ref bytes[i]);
+            }
+
+            _ = ReportProgressAsync(isMine, Math.Clamp(done / (double)total, 0, 0.99));
+        }
+
+        var options = new ParallelOptions { MaxDegreeOfParallelism = ParallelDownloads, CancellationToken = ct };
+        await Parallel.ForEachAsync(Enumerable.Range(0, items.Count), options, async (index, token) =>
+        {
+            var item = items[index];
+            if (File.Exists(item.Destination) && item.File.Size > 0 && new FileInfo(item.Destination).Length == item.File.Size)
+            {
+                Interlocked.Exchange(ref bytes[index], item.File.Size);
+                return;
+            }
+
+            // La limite est globale : les fichiers des autres imports en cours comptent aussi.
+            using var slot = await _gate.EnterAsync(token).ConfigureAwait(false);
             for (int attempt = 1; ; attempt++)
             {
                 try
                 {
-                    var url = await _torbox.RequestDownloadUrlAsync(torrentId, item.File.Id, ct).ConfigureAwait(false);
-                    await _downloader.DownloadAsync(
-                        url,
-                        item.Destination,
-                        item.File.Size,
-                        bytes =>
-                        {
-                            current = bytes;
-                            if (clock.Elapsed - lastReport < ProgressInterval)
-                            {
-                                return;
-                            }
-
-                            lastReport = clock.Elapsed;
-                            var progress = Math.Clamp((done + bytes) / (double)total, 0, 0.99);
-                            _ = ReportProgressAsync(isMine, progress);
-                        },
-                        ct).ConfigureAwait(false);
+                    var url = await _torbox.RequestDownloadUrlAsync(torrentId, item.File.Id, token).ConfigureAwait(false);
+                    await _downloader.DownloadAsync(url, item.Destination, item.File.Size, written => OnBytes(index, written), token).ConfigureAwait(false);
                     break;
                 }
-                catch (Exception ex) when (attempt < AttemptsPerFile && !ct.IsCancellationRequested
+                catch (Exception ex) when (attempt < AttemptsPerFile && !token.IsCancellationRequested
                     && ex is ImportException or TorboxException or HttpRequestException or IOException)
                 {
                     // Coupure réseau ou lien expiré : nouveau lien, reprise là où le fichier partiel s'est arrêté.
                     _logger.LogWarning(ex, "Téléchargement de {File} interrompu (essai {Attempt}/{Max}), nouvelle tentative", item.File.Name, attempt, AttemptsPerFile);
-                    await Task.Delay(TimeSpan.FromSeconds(10 * attempt), ct).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromSeconds(10 * attempt), token).ConfigureAwait(false);
                 }
             }
+        }).ConfigureAwait(false);
 
-            done += item.File.Size > 0 ? item.File.Size : current;
-        }
-
-        _logger.LogDebug("Import de {Title} : {Bytes} octets en {Elapsed}", RequestService.Describe(primary), done, clock.Elapsed);
+        _logger.LogDebug("Import de {Title} : {Bytes} octets en {Elapsed}", RequestService.Describe(primary), bytes.Sum(), clock.Elapsed);
     }
 
     /// <summary>Progression affichée dans la page (au plus toutes les 5 s) ; une erreur ici ne doit pas interrompre le téléchargement.</summary>
