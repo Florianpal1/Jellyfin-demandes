@@ -205,11 +205,13 @@
         ev.preventDefault();
         const query = $('#mediaQuery').value.trim();
         const kind = $('#mediaKind').value;
+        const year = $('#mediaYear').value.trim();
         const box = $('#mediaResults');
         $('#mediaDetail').hidden = true;
         box.replaceChildren(el('div', { class: 'spinner' }, 'Recherche…'));
         try {
-            const results = await api('GET', `C411Torbox/Media/Search?kind=${kind}&query=${encodeURIComponent(query)}`);
+            const yearParam = year ? `&year=${encodeURIComponent(year)}` : '';
+            const results = await api('GET', `C411Torbox/Media/Search?kind=${kind}&query=${encodeURIComponent(query)}${yearParam}`);
             box.replaceChildren();
             if (!results.length) {
                 box.append(el('p', { class: 'muted' }, 'Aucun résultat.'));
@@ -469,7 +471,7 @@
         $('#mediaKind').addEventListener('change', (e) => {
             $('#mediaQuery').placeholder = e.target.value === 'Book'
                 ? 'Titre du livre, de la BD ou du journal…'
-                : 'Titre du film ou de la série…';
+                : 'Titre, lien TMDB / IMDb ou identifiant (tt0068646)…';
         });
         $('#adminFilter').addEventListener('change', loadAdmin);
         $('#adminRefresh').addEventListener('click', loadAdmin);
