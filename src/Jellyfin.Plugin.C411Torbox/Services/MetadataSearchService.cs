@@ -19,6 +19,9 @@ namespace Jellyfin.Plugin.C411Torbox.Services;
 /// </summary>
 public class MetadataSearchService : ITitleAliasProvider
 {
+    /// <summary>Nom du fournisseur TMDB intégré à Jellyfin.</summary>
+    private const string TmdbProviderName = "TheMovieDb";
+
     private readonly IProviderManager _providerManager;
     private readonly ILibraryLookup _library;
     private readonly MediaResultCache _cache;
@@ -75,32 +78,16 @@ public class MetadataSearchService : ITitleAliasProvider
 
     public async Task<IReadOnlyList<MediaSearchResult>> SearchAsync(string query, MediaKind kind, CancellationToken ct)
     {
-        IEnumerable<RemoteSearchResult> raw = kind switch
+        // Films et séries : TMDB seul. Une recherche par nom n'y renvoie que l'identifiant Tmdb, et OMDb / TVDB
+        // que leur propre identifiant : Jellyfin ne peut pas rapprocher les fiches et le même titre sortirait
+        // deux fois (en français puis en anglais). Les autres fournisseurs ne servent que si TMDB ne trouve rien.
+        var raw = kind == MediaKind.Book
+            ? await QueryProvidersAsync(query, kind, null, ct).ConfigureAwait(false)
+            : await QueryProvidersAsync(query, kind, TmdbProviderName, ct).ConfigureAwait(false);
+        if (raw.Count == 0 && kind != MediaKind.Book)
         {
-            MediaKind.Movie => await _providerManager.GetRemoteSearchResults<Movie, MovieInfo>(
-                new RemoteSearchQuery<MovieInfo>
-                {
-                    SearchInfo = new MovieInfo { Name = query, MetadataLanguage = "fr", MetadataCountryCode = "FR" },
-                    IncludeDisabledProviders = true,
-                },
-                ct).ConfigureAwait(false),
-
-            // Fiches fournies par l'extension Bookshelf (Google Books, Comic Vine) si elle est installée.
-            MediaKind.Book => await _providerManager.GetRemoteSearchResults<Book, BookInfo>(
-                new RemoteSearchQuery<BookInfo>
-                {
-                    SearchInfo = new BookInfo { Name = query, MetadataLanguage = "fr", MetadataCountryCode = "FR" },
-                    IncludeDisabledProviders = true,
-                },
-                ct).ConfigureAwait(false),
-            _ => await _providerManager.GetRemoteSearchResults<Series, SeriesInfo>(
-                new RemoteSearchQuery<SeriesInfo>
-                {
-                    SearchInfo = new SeriesInfo { Name = query, MetadataLanguage = "fr", MetadataCountryCode = "FR" },
-                    IncludeDisabledProviders = true,
-                },
-                ct).ConfigureAwait(false),
-        };
+            raw = await QueryProvidersAsync(query, kind, null, ct).ConfigureAwait(false);
+        }
 
         var results = new List<MediaSearchResult>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -152,5 +139,41 @@ public class MetadataSearchService : ITitleAliasProvider
         }
 
         return results;
+    }
+
+    /// <summary>Recherche par nom auprès des fournisseurs du serveur, ou du seul <paramref name="providerName"/> s'il est renseigné.</summary>
+    private async Task<IReadOnlyList<RemoteSearchResult>> QueryProvidersAsync(string query, MediaKind kind, string? providerName, CancellationToken ct)
+    {
+        IEnumerable<RemoteSearchResult> raw = kind switch
+        {
+            MediaKind.Movie => await _providerManager.GetRemoteSearchResults<Movie, MovieInfo>(
+                new RemoteSearchQuery<MovieInfo>
+                {
+                    SearchInfo = new MovieInfo { Name = query, MetadataLanguage = "fr", MetadataCountryCode = "FR" },
+                    SearchProviderName = providerName,
+                    IncludeDisabledProviders = true,
+                },
+                ct).ConfigureAwait(false),
+
+            // Fiches fournies par l'extension Bookshelf (Google Books, Comic Vine) si elle est installée.
+            MediaKind.Book => await _providerManager.GetRemoteSearchResults<Book, BookInfo>(
+                new RemoteSearchQuery<BookInfo>
+                {
+                    SearchInfo = new BookInfo { Name = query, MetadataLanguage = "fr", MetadataCountryCode = "FR" },
+                    SearchProviderName = providerName,
+                    IncludeDisabledProviders = true,
+                },
+                ct).ConfigureAwait(false),
+            _ => await _providerManager.GetRemoteSearchResults<Series, SeriesInfo>(
+                new RemoteSearchQuery<SeriesInfo>
+                {
+                    SearchInfo = new SeriesInfo { Name = query, MetadataLanguage = "fr", MetadataCountryCode = "FR" },
+                    SearchProviderName = providerName,
+                    IncludeDisabledProviders = true,
+                },
+                ct).ConfigureAwait(false),
+        };
+
+        return raw.ToList();
     }
 }
