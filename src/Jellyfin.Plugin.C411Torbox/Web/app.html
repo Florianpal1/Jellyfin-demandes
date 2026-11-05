@@ -38,7 +38,8 @@
                     <option value="Series">Série</option>
                     <option value="Book">Livre / BD / presse</option>
                 </select>
-                <input id="mediaQuery" type="search" placeholder="Titre du film ou de la série…" required maxlength="200" aria-label="Titre">
+                <input id="mediaQuery" type="search" placeholder="Titre, lien TMDB / IMDb ou identifiant (tt0068646)…" required maxlength="200" aria-label="Titre">
+                <input id="mediaYear" type="number" min="1800" max="2200" placeholder="Année" aria-label="Année">
                 <button type="submit" class="primary">Rechercher</button>
             </form>
             <div id="mediaResults" class="cards"></div>

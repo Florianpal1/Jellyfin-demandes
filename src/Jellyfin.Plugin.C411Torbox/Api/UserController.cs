@@ -48,14 +48,19 @@ public class UserController : C411TorboxControllerBase
 
     /// <summary>Recherche de fiches films / séries / livres.</summary>
     [HttpGet("Media/Search")]
-    public async Task<ActionResult> SearchMedia([FromQuery, Required] string query, [FromQuery] MediaKind kind, CancellationToken ct)
+    public async Task<ActionResult> SearchMedia([FromQuery, Required] string query, [FromQuery] MediaKind kind, [FromQuery] int? year, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(query) || query.Length > 200)
         {
             return ErrorResult(StatusCodes.Status400BadRequest, "Recherche invalide.");
         }
 
-        return JsonOk(await _metadata.SearchAsync(query.Trim(), kind, ct).ConfigureAwait(false));
+        if (year is < 1800 or > 2200)
+        {
+            return ErrorResult(StatusCodes.Status400BadRequest, "Année invalide.");
+        }
+
+        return JsonOk(await _metadata.SearchAsync(query.Trim(), kind, year, ct).ConfigureAwait(false));
     }
 
     /// <summary>Recherche des torrents C411 pour un média (film, saison, épisode ou livre).</summary>
