@@ -70,6 +70,12 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Supprime le torrent de Torbox une fois les fichiers rangés (libère un emplacement Torbox).</summary>
     public bool DeleteFromTorboxAfterImport { get; set; }
 
+    /// <summary>
+    /// Nombre de fichiers téléchargés en même temps depuis Torbox, tous torrents confondus
+    /// (plusieurs demandes, ou plusieurs épisodes d'un pack de saison). Borné entre 1 et 10.
+    /// </summary>
+    public int MaxParallelDownloads { get; set; } = 2;
+
     /// <summary>Copie aussi les sous-titres présents dans le torrent.</summary>
     public bool ImportSubtitles { get; set; } = true;
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,7 +13,8 @@ namespace Jellyfin.Plugin.C411Torbox.Services.Import;
 
 /// <summary>
 /// Tâche de fond de l'import automatique : suit Torbox de près tant que des demandes y sont en cours
-/// (toutes les 2 min, sans attendre la tâche planifiée), puis télécharge et range les torrents terminés.
+/// (toutes les 2 min, sans attendre la tâche planifiée), puis télécharge et range les torrents terminés,
+/// plusieurs à la fois selon le réglage « téléchargements simultanés ».
 /// </summary>
 internal sealed class ImportWorker : BackgroundService
 {
@@ -44,9 +46,9 @@ internal sealed class ImportWorker : BackgroundService
         }
 
         var lastTorboxRefresh = DateTime.MinValue;
+        var running = new List<Task>();
         while (!stoppingToken.IsCancellationRequested)
         {
-            bool didWork = false;
             try
             {
                 if (_import.Enabled)
@@ -58,7 +60,12 @@ internal sealed class ImportWorker : BackgroundService
                         await _requests.RefreshTorboxStatusAsync(stoppingToken).ConfigureAwait(false);
                     }
 
-                    didWork = await _import.ProcessNextAsync(stoppingToken).ConfigureAwait(false);
+                    // Plusieurs torrents à la fois ; la limite globale de fichiers est appliquée par ImportService.
+                    while (running.Count < _import.ParallelDownloads
+                        && await _import.TryStartNextAsync(stoppingToken).ConfigureAwait(false) is { } import)
+                    {
+                        running.Add(import);
+                    }
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -71,16 +78,35 @@ internal sealed class ImportWorker : BackgroundService
                 _logger.LogError(ex, "Import automatique : erreur inattendue");
             }
 
-            if (!didWork)
+            // Réveil dès qu'un import se termine (place libérée), sinon après le délai habituel.
+            using (var idle = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken))
             {
-                try
-                {
-                    await Task.Delay(IdleDelay, stoppingToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
+                await Task.WhenAny(running.Append(Task.Delay(IdleDelay, idle.Token))).ConfigureAwait(false);
+                idle.Cancel();
+            }
+
+            Collect(running);
+        }
+
+        // Arrêt du serveur : chaque import remet ses demandes en attente avant de rendre la main.
+        try
+        {
+            await Task.WhenAll(running).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException || stoppingToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    /// <summary>Retire les imports terminés ; une erreur non gérée par l'import lui-même est journalisée.</summary>
+    private void Collect(List<Task> running)
+    {
+        foreach (var task in running.Where(t => t.IsCompleted).ToList())
+        {
+            running.Remove(task);
+            if (task.IsFaulted && task.Exception!.InnerException is not OperationCanceledException)
+            {
+                _logger.LogError(task.Exception.InnerException, "Import automatique : erreur inattendue");
             }
         }
     }

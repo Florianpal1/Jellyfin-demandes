@@ -135,6 +135,11 @@
                             <datalist id="c411BookLibraries"></datalist>
                             <div class="fieldDescription">Rangement : <code>Titre (2015)/Titre (2015).epub</code> ; un pack (intégrale, numéros de presse) garde le nom de chaque fichier. Facultatif si vous ne demandez pas de livres.</div>
                         </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="MaxParallelDownloads">Téléchargements simultanés</label>
+                            <input id="MaxParallelDownloads" type="number" min="1" max="10" step="1" is="emby-input" />
+                            <div class="fieldDescription">Nombre de fichiers téléchargés en même temps depuis Torbox, toutes demandes confondues (1 à 10). Plusieurs épisodes d'un pack de saison comptent chacun pour un.</div>
+                        </div>
                         <div class="checkboxContainer">
                             <label class="emby-checkbox-label">
                                 <input id="ImportSubtitles" type="checkbox" is="emby-checkbox" />
@@ -206,7 +211,7 @@
                 var page = document.querySelector('#C411TorboxConfigPage');
                 var textFields = ['TorznabUrl', 'TorznabApiKey', 'ProwlarrUrl', 'ProwlarrApiKey', 'MovieCategories', 'TvCategories', 'BookCategories', 'TorboxApiKey', 'DiscordWebhookUrl', 'MoviesPath', 'SeriesPath', 'BooksPath'];
                 var checkFields = ['AutoApproveWhenCached', 'ProwlarrIgnoreCertificateErrors', 'AutoImportEnabled', 'ImportSubtitles', 'DeleteFromTorboxAfterImport'];
-                var numberFields = ['HashLookupLimit', 'MovieMaxSizeGb', 'EpisodeMaxSizeGb', 'SeasonMaxSizeGb', 'BookMaxSizeGb', 'MinSeedersForAutoApproval'];
+                var numberFields = ['HashLookupLimit', 'MovieMaxSizeGb', 'EpisodeMaxSizeGb', 'SeasonMaxSizeGb', 'BookMaxSizeGb', 'MinSeedersForAutoApproval', 'MaxParallelDownloads'];
                 var savedIndexerId = 0;
 
                 function q(id) { return page.querySelector('#' + id); }
@@ -265,6 +270,7 @@
                         numberFields.forEach(function (f) { config[f] = parseFloat(q(f).value) || 0; });
                         config.HashLookupLimit = Math.round(config.HashLookupLimit);
                         config.MinSeedersForAutoApproval = Math.round(config.MinSeedersForAutoApproval);
+                        config.MaxParallelDownloads = Math.min(10, Math.max(1, Math.round(config.MaxParallelDownloads) || 1));
                         checkFields.forEach(function (f) { config[f] = q(f).checked; });
                         config.ProwlarrIndexerId = parseInt(q('ProwlarrIndexerId').value, 10) || 0;
                         config.IndexerMode = q('IndexerMode').value;
