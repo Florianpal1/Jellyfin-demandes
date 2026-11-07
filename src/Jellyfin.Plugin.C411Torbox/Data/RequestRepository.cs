@@ -11,7 +11,7 @@ namespace Jellyfin.Plugin.C411Torbox.Data;
 /// <summary>Stockage SQLite des demandes et des notifications.</summary>
 public class RequestRepository
 {
-    private const int SchemaVersion = 3;
+    private const int SchemaVersion = 4;
 
     private static readonly RequestStatus[] ActiveStatuses =
     [
@@ -80,7 +80,8 @@ public class RequestRepository
                 UPDATE Requests SET UpdatedAt=$UpdatedAt, TorrentTitle=$TorrentTitle, InfoHash=$InfoHash, MagnetUrl=$MagnetUrl, DownloadUrl=$DownloadUrl,
                     AutoApprovalReason=$AutoApprovalReason, Status=$Status, ReviewedBy=$ReviewedBy, ReviewedAt=$ReviewedAt, RejectReason=$RejectReason,
                     TorboxTorrentId=$TorboxTorrentId, TorboxProgress=$TorboxProgress, LastError=$LastError,
-                    ImportProgress=$ImportProgress, ImportedPath=$ImportedPath
+                    ImportProgress=$ImportProgress, ImportedPath=$ImportedPath, MissingOnTorboxSince=$MissingOnTorboxSince,
+                    ImportAttempts=$ImportAttempts, RetryImportAfter=$RetryImportAfter, StaleNotifiedAt=$StaleNotifiedAt
                 WHERE Id=$Id;
                 """;
             r.UpdatedAt = DateTime.UtcNow;
@@ -101,12 +102,34 @@ public class RequestRepository
             ? QueryRequests("ORDER BY CreatedAt DESC LIMIT $p0", limit)
             : QueryRequests("WHERE Status = $p0 ORDER BY CreatedAt DESC LIMIT $p1", status.Value.ToString(), limit);
 
-    /// <summary>Demandes en cours (ni refusées, ni échouées, ni disponibles).</summary>
+    /// <summary>Demandes en cours (ni refusées, ni annulées, ni échouées, ni disponibles).</summary>
     public IReadOnlyList<MediaRequest> GetActive()
         => QueryRequests("WHERE Status IN (" + string.Join(",", ActiveStatuses.Select(s => "'" + s + "'")) + ") ORDER BY CreatedAt");
 
     public IReadOnlyList<MediaRequest> GetActiveByHash(string infoHash)
         => GetActive().Where(r => string.Equals(r.InfoHash, infoHash, StringComparison.OrdinalIgnoreCase)).ToList();
+
+    /// <summary>
+    /// Ménage : supprime les demandes terminées (disponibles, refusées, annulées) et les notifications lues
+    /// plus anciennes que les dates données. Les demandes en cours ou en échec sont toujours gardées.
+    /// </summary>
+    public (int Requests, int Notifications) Purge(DateTime requestsBefore, DateTime notificationsBefore)
+    {
+        lock (_writeLock)
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM Requests WHERE Status IN ('Available', 'Rejected', 'Cancelled') AND UpdatedAt < $r;";
+            cmd.Parameters.AddWithValue("$r", ToDb(requestsBefore));
+            int requests = cmd.ExecuteNonQuery();
+
+            cmd.Parameters.Clear();
+            cmd.CommandText = "DELETE FROM Notifications WHERE ReadAt IS NOT NULL AND CreatedAt < $n;";
+            cmd.Parameters.AddWithValue("$n", ToDb(notificationsBefore));
+            int notifications = cmd.ExecuteNonQuery();
+            return (requests, notifications);
+        }
+    }
 
     public Notification AddNotification(Notification n)
     {
@@ -212,6 +235,10 @@ public class RequestRepository
         Add("$EpisodesInLibraryAtRequest", r.EpisodesInLibraryAtRequest);
         Add("$ImportProgress", r.ImportProgress);
         Add("$ImportedPath", r.ImportedPath);
+        Add("$MissingOnTorboxSince", r.MissingOnTorboxSince is null ? null : ToDb(r.MissingOnTorboxSince.Value));
+        Add("$ImportAttempts", r.ImportAttempts);
+        Add("$RetryImportAfter", r.RetryImportAfter is null ? null : ToDb(r.RetryImportAfter.Value));
+        Add("$StaleNotifiedAt", r.StaleNotifiedAt is null ? null : ToDb(r.StaleNotifiedAt.Value));
     }
 
     private static string ToDb(DateTime d) => d.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
@@ -272,6 +299,10 @@ public class RequestRepository
                 EpisodesInLibraryAtRequest = (int)(L("EpisodesInLibraryAtRequest") ?? 0),
                 ImportProgress = reader["ImportProgress"] is double ip ? ip : null,
                 ImportedPath = S("ImportedPath"),
+                MissingOnTorboxSince = S("MissingOnTorboxSince") is { } ms ? FromDb(ms) : null,
+                ImportAttempts = (int)(L("ImportAttempts") ?? 0),
+                RetryImportAfter = S("RetryImportAfter") is { } ria ? FromDb(ria) : null,
+                StaleNotifiedAt = S("StaleNotifiedAt") is { } sn ? FromDb(sn) : null,
             });
         }
 
@@ -322,13 +353,25 @@ public class RequestRepository
             }
 
             // v3 : livres (identifiants Google Books / Comic Vine / ISBN).
-            using var v3 = conn.CreateCommand();
-            v3.Transaction = tx;
-            v3.CommandText = """
-                ALTER TABLE Requests ADD COLUMN BookIds TEXT NULL;
-                PRAGMA user_version = 3;
+            if (version < 3)
+            {
+                using var v3 = conn.CreateCommand();
+                v3.Transaction = tx;
+                v3.CommandText = "ALTER TABLE Requests ADD COLUMN BookIds TEXT NULL;";
+                v3.ExecuteNonQuery();
+            }
+
+            // v4 : torrent disparu de Torbox, nouvelles tentatives de rangement, demandes qui stagnent.
+            using var v4 = conn.CreateCommand();
+            v4.Transaction = tx;
+            v4.CommandText = """
+                ALTER TABLE Requests ADD COLUMN MissingOnTorboxSince TEXT NULL;
+                ALTER TABLE Requests ADD COLUMN ImportAttempts INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE Requests ADD COLUMN RetryImportAfter TEXT NULL;
+                ALTER TABLE Requests ADD COLUMN StaleNotifiedAt TEXT NULL;
+                PRAGMA user_version = 4;
                 """;
-            v3.ExecuteNonQuery();
+            v4.ExecuteNonQuery();
             tx.Commit();
         }
     }

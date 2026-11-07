@@ -197,6 +197,32 @@
                             <input id="DiscordWebhookUrl" type="url" is="emby-input" placeholder="https://discord.com/api/webhooks/…" />
                             <div class="fieldDescription">Les notifications sont toujours visibles dans la page des demandes ; le webhook les envoie en plus sur Discord.</div>
                         </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="DiscordSendUserNotifications" type="checkbox" is="emby-checkbox" />
+                                <span>Envoyer aussi sur Discord les notifications des utilisateurs</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">Validation, refus (avec son motif) et disponibilité, précédés du nom du demandeur. Décoché : seules les notifications des administrateurs partent sur Discord.</div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h3 class="sectionTitle">Suivi et ménage</h3>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="StaleRequestDays">Alerte après (jours)</label>
+                            <input id="StaleRequestDays" type="number" min="0" max="365" is="emby-input" />
+                            <div class="fieldDescription">Prévient les administrateurs d'une demande toujours en cours (torrent sans source, média non reconnu par Jellyfin…) après ce nombre de jours. 0 = désactivé.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="RequestRetentionDays">Garder les demandes terminées (jours)</label>
+                            <input id="RequestRetentionDays" type="number" min="0" max="3650" is="emby-input" />
+                            <div class="fieldDescription">Les demandes disponibles, refusées ou annulées sont ensuite supprimées. Les demandes en cours ou en échec sont toujours gardées. 0 = jamais.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="NotificationRetentionDays">Garder les notifications lues (jours)</label>
+                            <input id="NotificationRetentionDays" type="number" min="0" max="3650" is="emby-input" />
+                            <div class="fieldDescription">0 = jamais supprimées. Le ménage se fait chaque nuit (Tâches planifiées → « Ménage des demandes »).</div>
+                        </div>
                     </div>
 
                     <div>
@@ -210,8 +236,8 @@
                 var pluginId = 'a1beec8b-cc16-4382-96ca-8d4cdbfd032c';
                 var page = document.querySelector('#C411TorboxConfigPage');
                 var textFields = ['TorznabUrl', 'TorznabApiKey', 'ProwlarrUrl', 'ProwlarrApiKey', 'MovieCategories', 'TvCategories', 'BookCategories', 'TorboxApiKey', 'DiscordWebhookUrl', 'MoviesPath', 'SeriesPath', 'BooksPath'];
-                var checkFields = ['AutoApproveWhenCached', 'ProwlarrIgnoreCertificateErrors', 'AutoImportEnabled', 'ImportSubtitles', 'DeleteFromTorboxAfterImport'];
-                var numberFields = ['HashLookupLimit', 'MovieMaxSizeGb', 'EpisodeMaxSizeGb', 'SeasonMaxSizeGb', 'BookMaxSizeGb', 'MinSeedersForAutoApproval', 'MaxParallelDownloads'];
+                var checkFields = ['AutoApproveWhenCached', 'ProwlarrIgnoreCertificateErrors', 'AutoImportEnabled', 'ImportSubtitles', 'DeleteFromTorboxAfterImport', 'DiscordSendUserNotifications'];
+                var numberFields = ['HashLookupLimit', 'MovieMaxSizeGb', 'EpisodeMaxSizeGb', 'SeasonMaxSizeGb', 'BookMaxSizeGb', 'MinSeedersForAutoApproval', 'MaxParallelDownloads', 'StaleRequestDays', 'RequestRetentionDays', 'NotificationRetentionDays'];
                 var savedIndexerId = 0;
 
                 function q(id) { return page.querySelector('#' + id); }
@@ -271,6 +297,7 @@
                         config.HashLookupLimit = Math.round(config.HashLookupLimit);
                         config.MinSeedersForAutoApproval = Math.round(config.MinSeedersForAutoApproval);
                         config.MaxParallelDownloads = Math.min(10, Math.max(1, Math.round(config.MaxParallelDownloads) || 1));
+                        ['StaleRequestDays', 'RequestRetentionDays', 'NotificationRetentionDays'].forEach(function (f) { config[f] = Math.max(0, Math.round(config[f])); });
                         checkFields.forEach(function (f) { config[f] = q(f).checked; });
                         config.ProwlarrIndexerId = parseInt(q('ProwlarrIndexerId').value, 10) || 0;
                         config.IndexerMode = q('IndexerMode').value;

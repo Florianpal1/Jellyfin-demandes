@@ -43,7 +43,14 @@ internal sealed class NotificationService : INotificationService
     public Task NotifyUserAsync(Guid userId, string message, long? requestId, CancellationToken ct)
     {
         _repository.AddNotification(new Notification { UserId = userId, RequestId = requestId, Message = message });
-        return SendWebhookAsync(message, ct);
+        if (!_config.Current.DiscordSendUserNotifications)
+        {
+            return Task.CompletedTask;
+        }
+
+        // Sur Discord, le salon est partagé : on précise à qui s'adresse le message.
+        var userName = requestId is { } id ? _repository.Get(id)?.UserName : null;
+        return SendWebhookAsync(string.IsNullOrWhiteSpace(userName) ? message : $"👤 {userName} — {message}", ct);
     }
 
     private async Task SendWebhookAsync(string message, CancellationToken ct)

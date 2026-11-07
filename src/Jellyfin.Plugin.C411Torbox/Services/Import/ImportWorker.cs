@@ -38,11 +38,11 @@ internal sealed class ImportWorker : BackgroundService
     {
         try
         {
-            await _requests.ResetInterruptedImportsAsync(stoppingToken).ConfigureAwait(false);
+            await _requests.RecoverInterruptedAsync(stoppingToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogError(ex, "Reprise des imports interrompus impossible");
+            _logger.LogError(ex, "Reprise des envois et imports interrompus impossible");
         }
 
         var lastTorboxRefresh = DateTime.MinValue;

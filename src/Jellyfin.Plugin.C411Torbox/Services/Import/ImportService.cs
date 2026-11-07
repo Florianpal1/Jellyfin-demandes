@@ -29,6 +29,9 @@ public class ImportService
 {
     private const int AttemptsPerFile = 3;
 
+    /// <summary>Tentatives de rangement automatiques avant l'échec définitif (« Relancer » par un admin).</summary>
+    internal const int MaxImportAttempts = 3;
+
     /// <summary>Marge d'espace disque gardée libre en plus des fichiers à télécharger.</summary>
     private const long FreeSpaceMargin = 1L * 1024 * 1024 * 1024;
 
@@ -112,8 +115,9 @@ public class ImportService
             return null;
         }
 
+        var now = DateTime.UtcNow;
         var next = _repository.GetActive()
-            .Where(r => r.Status == RequestStatus.CompletedOnTorbox)
+            .Where(r => r.Status == RequestStatus.CompletedOnTorbox && (r.RetryImportAfter is null || r.RetryImportAfter <= now))
             .OrderBy(r => r.UpdatedAt)
             .FirstOrDefault();
         if (next is null)
@@ -146,6 +150,7 @@ public class ImportService
                 r.Status = RequestStatus.Importing;
                 r.ImportProgress = 0;
                 r.LastError = null;
+                r.RetryImportAfter = null;
             },
             ct);
 
@@ -165,6 +170,7 @@ public class ImportService
                 r.Status = RequestStatus.Imported;
                 r.ImportProgress = 1;
                 r.ImportedPath = folder;
+                r.ImportAttempts = 0;
             }, CancellationToken.None).ConfigureAwait(false);
 
             _logger.LogInformation(
@@ -192,17 +198,39 @@ public class ImportService
         }
         catch (Exception ex)
         {
-            // Toute autre erreur (disque, réseau, réponse inattendue) : la demande ne doit pas rester bloquée en « Importing ».
-            _logger.LogError(ex, "Import de « {Title} » en échec", RequestService.Describe(primary));
+            // Toute autre erreur (disque, réseau, NAS démonté, réponse inattendue) : la demande ne doit pas rester bloquée
+            // en « Importing ». Nouvel essai automatique plus tard, puis échec définitif signalé aux admins.
+            var attempt = primary.ImportAttempts + 1;
+            if (attempt < MaxImportAttempts)
+            {
+                var retryAt = DateTime.UtcNow + RetryDelay(attempt);
+                _logger.LogWarning(ex, "Import de « {Title} » en échec (essai {Attempt}/{Max}), nouvel essai à {RetryAt:u}", RequestService.Describe(primary), attempt, MaxImportAttempts, retryAt);
+                await _requests.UpdateActiveAsync(IsMine, r =>
+                {
+                    r.Status = RequestStatus.CompletedOnTorbox;
+                    r.ImportProgress = null;
+                    r.ImportAttempts = attempt;
+                    r.RetryImportAfter = retryAt;
+                    r.LastError = ex.Message;
+                }, CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+
+            _logger.LogError(ex, "Import de « {Title} » en échec après {Attempts} essais", RequestService.Describe(primary), attempt);
             await _requests.UpdateActiveAsync(IsMine, r =>
             {
                 r.Status = RequestStatus.ImportFailed;
+                r.ImportAttempts = attempt;
+                r.RetryImportAfter = null;
                 r.LastError = ex.Message;
             }, CancellationToken.None).ConfigureAwait(false);
             await _notifications.NotifyAdminsAsync(
-                $"Échec du rangement de « {RequestService.Describe(primary)} » : {ex.Message}", primary.Id, CancellationToken.None).ConfigureAwait(false);
+                $"Échec du rangement de « {RequestService.Describe(primary)} » après {attempt} essais : {ex.Message}", primary.Id, CancellationToken.None).ConfigureAwait(false);
         }
     }
+
+    /// <summary>Attente avant le nouvel essai : 5 min après le premier échec, 30 min après le deuxième.</summary>
+    internal static TimeSpan RetryDelay(int failedAttempts) => failedAttempts <= 1 ? TimeSpan.FromMinutes(5) : TimeSpan.FromMinutes(30);
 
     /// <summary>Lit les fichiers sur Torbox, résout les dossiers et calcule le plan d'import.</summary>
     private async Task<(string Folder, ImportPlan Plan, long TorrentId)> PrepareAsync(MediaRequest request, CancellationToken ct)

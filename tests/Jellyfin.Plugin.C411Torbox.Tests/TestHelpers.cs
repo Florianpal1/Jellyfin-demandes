@@ -89,6 +89,9 @@ internal sealed class FakeLibrary : ILibraryLookup
             ? PresentEpisodes.Count(p => p.Season == season && (episode is null || p.Episode == episode))
             : episode.HasValue ? Math.Min(Episodes, 1) : Episodes;
 
+    public IReadOnlySet<int> GetEpisodeNumbers(IReadOnlyDictionary<string, string> providerIds, int season)
+        => PresentEpisodes.Where(p => p.Season == season).Select(p => p.Episode).ToHashSet();
+
     public string? GetSeriesFolder(IReadOnlyDictionary<string, string> providerIds) => SeriesFolder;
 
     public string? GetSeasonFolder(IReadOnlyDictionary<string, string> providerIds, int season) => null;

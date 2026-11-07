@@ -10,14 +10,25 @@
     Facultatif : version du plugin (« 1.2.3 », « v1.2.3 » ou « 1.2.3.4 »). Par défaut : celle du .csproj.
     Utilisé par la CI avec le tag de la release GitHub.
 
+.PARAMETER SourceUrlBase
+    Facultatif : adresse du dossier où l'archive zip sera publiée. Si renseignée, un « manifest.json » de dépôt
+    de plugins Jellyfin est aussi généré (Tableau de bord → Extensions → Dépôts), pointant vers
+    <SourceUrlBase>/c411-torbox_<version>.zip. Jellyfin doit pouvoir lire le manifest et l'archive sans authentification.
+
+.PARAMETER Changelog
+    Facultatif : notes de version, reprises dans meta.json et manifest.json.
+
 .EXAMPLE
     ./scripts/package.ps1
     ./scripts/package.ps1 -PluginsPath "\\nas\docker\jellyfin\config\plugins"
     ./scripts/package.ps1 -Version v0.2.0
+    ./scripts/package.ps1 -SourceUrlBase "http://nas.local/jellyfin-plugins"
 #>
 param(
     [string]$PluginsPath,
-    [string]$Version
+    [string]$Version,
+    [string]$SourceUrlBase,
+    [string]$Changelog = 'Voir les notes de la release GitHub.'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,16 +61,24 @@ if (Test-Path $out) { Remove-Item -Recurse -Force $out }
 New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item (Join-Path $publish 'Jellyfin.Plugin.C411Torbox.dll') $out
 
+$guid = 'a1beec8b-cc16-4382-96ca-8d4cdbfd032c'
+$name = 'C411 Torbox'
+$description = 'Recherche de torrents C411 (en direct ou via Prowlarr), demandes utilisateurs avec validation admin, envoi vers Torbox puis téléchargement et rangement dans la bibliothèque.'
+$overview = 'Demandes de films, séries et livres C411 envoyées vers Torbox'
+$owner = 'flori'
+$targetAbi = '12.2.0.0'
+$timestamp = (Get-Date).ToUniversalTime().ToString('o')
+
 $meta = [ordered]@{
     category    = 'General'
-    changelog   = 'Première version.'
-    description = 'Recherche de torrents C411 (via Prowlarr), demandes utilisateurs avec validation admin et envoi vers Torbox.'
-    guid        = 'a1beec8b-cc16-4382-96ca-8d4cdbfd032c'
-    name        = 'C411 Torbox'
-    overview    = 'Demandes de films et séries C411 envoyées vers Torbox'
-    owner       = 'flori'
-    targetAbi   = '12.2.0.0'
-    timestamp   = (Get-Date).ToUniversalTime().ToString('o')
+    changelog   = $Changelog
+    description = $description
+    guid        = $guid
+    name        = $name
+    overview    = $overview
+    owner       = $owner
+    targetAbi   = $targetAbi
+    timestamp   = $timestamp
     version     = $version
     status      = 'Active'
     autoUpdate  = $false
@@ -74,6 +93,33 @@ Compress-Archive -Path (Join-Path $out '*') -DestinationPath $zip
 
 Write-Host "Plugin prêt : $out"
 Write-Host "Archive     : $zip"
+
+if ($SourceUrlBase) {
+    # Dépôt de plugins Jellyfin : une seule version (la dernière), somme MD5 de l'archive.
+    $manifest = @(
+        [ordered]@{
+            guid        = $guid
+            name        = $name
+            description = $description
+            overview    = $overview
+            owner       = $owner
+            category    = 'General'
+            versions    = @(
+                [ordered]@{
+                    version   = $version
+                    changelog = $Changelog
+                    targetAbi = $targetAbi
+                    sourceUrl = $SourceUrlBase.TrimEnd('/') + "/c411-torbox_$version.zip"
+                    checksum  = (Get-FileHash -Algorithm MD5 $zip).Hash.ToLowerInvariant()
+                    timestamp = $timestamp
+                }
+            )
+        }
+    )
+    $manifestPath = Join-Path $root 'artifacts/manifest.json'
+    [IO.File]::WriteAllText($manifestPath, (ConvertTo-Json -InputObject $manifest -Depth 5), (New-Object Text.UTF8Encoding($false)))
+    Write-Host "Manifest    : $manifestPath"
+}
 
 if ($PluginsPath) {
     $target = Join-Path $PluginsPath $folderName

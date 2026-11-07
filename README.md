@@ -7,6 +7,9 @@ Plugin Jellyfin **12.2** (usage privé) :
 - **Torbox** : les demandes validées y sont ajoutées directement.
 - **Téléchargement et rangement automatiques** (option, depuis la 0.3.0) : remplace l'application « RealDebrid » + Radarr / Sonarr. Une fois le torrent terminé sur Torbox, le plugin télécharge les fichiers sur le NAS (avec reprise), puis les range au format standard Radarr / Sonarr. Le média est connu d'après la fiche TMDB de la demande ; seuls les numéros d'épisode sont lus dans les noms de fichiers.
 - Suivi : progression Torbox, puis progression du téléchargement vers le NAS, passage en « Disponible » quand le média arrive dans Jellyfin, notifications (dans la page + webhook Discord optionnel).
+- **Annulation** : un utilisateur annule sa demande tant qu'elle n'est pas partie sur Torbox ; un admin annule toute demande en cours (avec, en option, la suppression du torrent sur Torbox) ou la marque « Disponible » si Jellyfin ne l'a pas reconnue.
+- **Séries** : choix de l'épisode dans la liste de la saison (titres, épisodes déjà présents grisés), ou saisie du numéro si la liste est inconnue.
+- **Surveillance** : un torrent supprimé ou en erreur sur Torbox passe la demande « En échec » (un admin la renvoie) ; un torrent sans source est signalé sous son statut ; les demandes toujours en cours après quelques jours sont signalées aux admins.
 
 Le plan détaillé et les décisions sont dans [PLAN.md](PLAN.md).
 
@@ -45,6 +48,24 @@ gh release create v0.2.0 --generate-notes
 
 Pour régénérer l'archive d'une release existante : onglet *Actions* → *Release* → *Run workflow* avec le tag.
 
+### Dépôt de plugins Jellyfin (mises à jour depuis le tableau de bord)
+
+Chaque release contient aussi un `manifest.json` (dépôt de plugins Jellyfin, dernière version, somme MD5 de l'archive). Dans Tableau de bord → Extensions → **Dépôts**, ajouter :
+
+```
+https://github.com/Florianpal1/Jellyfin-demandes/releases/latest/download/manifest.json
+```
+
+Le plugin s'installe ensuite et se met à jour depuis le catalogue, sans copie manuelle. Le manifest est joint aux releases à partir de la 0.8.0 (les précédentes n'en ont pas).
+
+> Jellyfin lit le manifest et l'archive **sans authentification** : le dépôt GitHub doit rester **public**. Sinon, publier l'archive et le manifest sur un serveur web du réseau local :
+>
+> ```powershell
+> ./scripts/package.ps1 -SourceUrlBase "http://nas.local/jellyfin-plugins"
+> ```
+>
+> puis copier `artifacts/c411-torbox_<version>.zip` et `artifacts/manifest.json` dans ce dossier, et déclarer `http://nas.local/jellyfin-plugins/manifest.json` comme dépôt.
+
 ## Configuration
 
 Tableau de bord → Extensions → **C411 Torbox** :
@@ -54,7 +75,8 @@ Tableau de bord → Extensions → **C411 Torbox** :
 2. **Torbox** : clé API, puis « Enregistrer et tester Torbox ».
 3. **Téléchargement et rangement automatiques** : cocher l'option, indiquer les dossiers Films, Séries et (facultatif) Livres (chemins vus par le serveur Jellyfin ; vide = premier dossier de la bibliothèque Jellyfin du bon type), puis « Enregistrer et vérifier les dossiers » (existence et droit d'écriture).
 4. **Validation automatique** : seuils en Go (0 = désactivé) et nombre minimum de seeders.
-5. **Notifications** : webhook Discord facultatif.
+5. **Notifications** : webhook Discord facultatif. Par défaut, les notifications des utilisateurs (validation, refus et motif, disponibilité) y partent aussi, précédées du nom du demandeur ; décocher l'option pour n'y envoyer que celles des admins.
+6. **Suivi et ménage** : alerte des admins pour une demande toujours en cours après N jours (3 par défaut) ; suppression des demandes terminées (disponibles, refusées, annulées) après 180 jours et des notifications lues après 90 jours. 0 = désactivé.
 
 ### Rangement (format Radarr / Sonarr)
 
@@ -72,7 +94,7 @@ Livres/Astérix le Gaulois (1961)/Astérix le Gaulois (1961).cbz
 - Titres d'épisodes : ils viennent des fournisseurs de métadonnées de Jellyfin (TMDB, en français). Sans titre, le fichier est nommé `The Bear - S01E02 WEBDL-1080p.mkv`.
 - Le téléchargement se fait en `.c411part` (ignoré par Jellyfin), puis le fichier est renommé une fois complet : Jellyfin ne voit jamais de fichier incomplet. Un arrêt du serveur ou une coupure réseau reprend là où le téléchargement s'était arrêté.
 - Une demande à la fois. L'espace libre est vérifié avant de commencer (taille du torrent + 1 Go de marge).
-- En cas d'échec (dossier introuvable, disque plein, épisode absent du torrent…), la demande passe en « Échec du rangement » avec la raison, et les admins sont notifiés. Bouton **Relancer** dans l'onglet Administration.
+- En cas d'échec (coupure réseau, partage NAS démonté, disque plein, épisode absent du torrent…), le rangement est retenté automatiquement 5 min puis 30 min plus tard (l'heure du prochain essai s'affiche sous le statut). Après 3 essais, la demande passe en « Échec du rangement » avec la raison, et les admins sont notifiés. Bouton **Relancer** dans l'onglet Administration.
 - Option : supprimer le torrent de Torbox une fois rangé.
 
 ### Passer de l'application « RealDebrid » + Radarr / Sonarr au plugin
@@ -82,6 +104,10 @@ Livres/Astérix le Gaulois (1961)/Astérix le Gaulois (1961).cbz
 3. Radarr / Sonarr peuvent être arrêtés pour ce qui passe par le plugin. Les demandes déjà terminées sur Torbox sont rangées tout de suite, sauf si le média est déjà dans Jellyfin (passage direct en « Disponible »).
 
 L'intervalle de suivi Torbox (10 min par défaut) se règle dans Tableau de bord → Tâches planifiées → « Suivi des demandes Torbox ». Quand le rangement automatique est activé, Torbox est en plus consulté toutes les 2 minutes tant qu'une demande y est en cours.
+
+- Torrent absent du compte Torbox pendant plus d'une heure (supprimé à la main, expiré) ou en erreur sur Torbox : la demande passe « En échec ». **Renvoyer** la renvoie ; un torrent en erreur est alors supprimé de Torbox puis ajouté à nouveau.
+- La tâche « Ménage des demandes » (chaque nuit à 4 h) signale les demandes qui stagnent et supprime les anciennes demandes terminées et notifications lues.
+- Un envoi à Torbox interrompu par un arrêt du serveur passe « En échec » au redémarrage (à renvoyer) ; un téléchargement vers le NAS interrompu reprend tout seul.
 
 ## Utilisation
 
@@ -96,6 +122,6 @@ dotnet test
 ```
 
 - `src/Jellyfin.Plugin.C411Torbox` : le plugin (API, services, pages web embarquées).
-- `tests/Jellyfin.Plugin.C411Torbox.Tests` : tests unitaires et scénarios complets (SQLite réel, C411/Prowlarr/Torbox simulés).
+- `tests/Jellyfin.Plugin.C411Torbox.Tests` : tests unitaires et scénarios complets (SQLite réel, C411/Prowlarr/Torbox simulés), et tests de l'interface web (`WebUiTests` : syntaxe des scripts embarqués, fonctions de `app.js`, champs de la page de configuration) exécutés avec le moteur JavaScript [Jint](https://github.com/sebastienros/jint), sans navigateur ni Node.
 
 Les packages `Jellyfin.Controller` / `Jellyfin.Model` sont épinglés en **12.2.0** et `Microsoft.Data.Sqlite` en **10.0.11** exactement (version embarquée par Jellyfin 12.2, patch compris ; Dependabot ne propose que les correctifs de `Jellyfin.Controller` / `Jellyfin.Model` et ignore Sqlite). Ces assemblies ne sont pas copiées avec le plugin : elles sont fournies par le serveur.

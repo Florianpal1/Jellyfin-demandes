@@ -62,8 +62,10 @@ public class AdminController : C411TorboxControllerBase
         }
     }
 
+    /// <summary>Demandes, filtrées par statut ; <paramref name="active"/> : toutes les demandes en cours.</summary>
     [HttpGet("Requests")]
-    public ActionResult GetRequests([FromQuery] RequestStatus? status) => JsonOk(_repository.GetAll(status));
+    public ActionResult GetRequests([FromQuery] RequestStatus? status, [FromQuery] bool active = false)
+        => JsonOk(active ? _repository.GetActive().OrderByDescending(r => r.CreatedAt).ToList() : _repository.GetAll(status));
 
     [HttpPost("Requests/{id}/Approve")]
     public Task<ActionResult> Approve([FromRoute] long id, CancellationToken ct)
@@ -72,6 +74,14 @@ public class AdminController : C411TorboxControllerBase
     [HttpPost("Requests/{id}/Reject")]
     public Task<ActionResult> Reject([FromRoute] long id, [FromBody] RejectBody body, CancellationToken ct)
         => Run(() => _requests.RejectAsync(id, CurrentUserName, body.Reason, ct));
+
+    [HttpPost("Requests/{id}/Cancel")]
+    public Task<ActionResult> Cancel([FromRoute] long id, [FromBody] CancelBody? body, CancellationToken ct)
+        => Run(() => _requests.CancelAsync(id, null, CurrentUserName, body?.DeleteFromTorbox ?? false, ct));
+
+    [HttpPost("Requests/{id}/MarkAvailable")]
+    public Task<ActionResult> MarkAvailable([FromRoute] long id, CancellationToken ct)
+        => Run(() => _requests.MarkAvailableAsync(id, CurrentUserName, ct));
 
     [HttpPost("Requests/{id}/RetryImport")]
     public Task<ActionResult> RetryImport([FromRoute] long id, CancellationToken ct)

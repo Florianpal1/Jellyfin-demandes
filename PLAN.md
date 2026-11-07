@@ -1,6 +1,6 @@
 # Plan — Plugin Jellyfin « C411 → Torbox »
 
-> Statut : v0.1.0 développée, à tester sur le serveur réel (voir § 6) — plan révisé le 2026-11-02 après réponses aux questions Q1 à Q14
+> Statut : v0.7.0 publiée et utilisée sur le serveur ; améliorations de fiabilité et de suivi prêtes pour la 0.8.0 (voir § 9). Historique des versions au § 10. Plan initial révisé le 2026-11-02 après réponses aux questions Q1 à Q14.
 > Objectif : permettre aux utilisateurs Jellyfin de chercher un film ou une série, de choisir un torrent C411 (via Prowlarr), et de faire une demande. Les administrateurs valident les demandes, avec validation automatique selon des règles configurables. Les demandes validées sont envoyées directement à Torbox.
 > Usage : privé, interface en français.
 
@@ -245,7 +245,9 @@ Canaux : **notifications dans la page du plugin** (cloche avec compteur, stocké
 
 ---
 
-## 6. État d'avancement (2026-11-02)
+## 6. État initial (v0.1.0, 2026-11-02)
+
+> Section historique : état au moment de la 0.1.0. L'état actuel est décrit au § 9 et l'historique au § 10.
 
 Version **0.1.0** écrite : étapes 1 à 12 implémentées, compilées contre Jellyfin 12.2.0, **47 tests automatisés au vert** (règles d'auto-validation, tri, calcul d'infohash, parsing Prowlarr/Torbox, scénarios complets demande → validation → Torbox → disponible avec SQLite réel).
 
@@ -300,3 +302,39 @@ Objectif : demander des livres comme les films et les séries.
 - Schéma SQLite v3 : colonne `BookIds` (« GoogleBooks=…;Isbn=… »).
 
 **Non vérifié à ce stade** : catégories réelles de C411 pour les livres (`t=caps`), clés exactes des identifiants posés par Bookshelf sur le serveur.
+
+## 9. Fiabilité, suivi et confort (0.8.0, 2026-11-07)
+
+Objectif : qu'un Torbox lent ou capricieux ne bloque plus rien, que les demandes ne restent plus coincées sans que personne ne le sache, et moins d'interventions manuelles.
+
+Décisions :
+- **Envoi à Torbox hors du verrou** : `TorboxSubmitter` fait la partie réseau (liste du compte, téléchargement du `.torrent`, ajout, rattachement d'un doublon) sans base ni verrou. `RequestService` réserve la demande sous le verrou (`Approved` / `AutoApproved` : un second admin reçoit une 409), envoie hors verrou, puis enregistre le résultat sous le verrou en relisant les demandes du même torrent (celles arrivées pendant l'envoi suivent). Les notifications (webhook Discord) partent toutes après la sortie du verrou.
+- **Torrent disparu ou en erreur sur Torbox** : absent de la liste du compte pendant plus d'1 h (`MissingOnTorboxSince`) ou `download_state` contenant « error » / « fail » → « En échec », admins et demandeur prévenus. « Renvoyer » supprime un torrent en erreur de Torbox puis l'ajoute à nouveau. Torrent « stalled » : reste en cours, état affiché sous le statut.
+- **Arrêt du serveur** : au démarrage, un import interrompu reprend (inchangé) et un envoi interrompu (`Approved` / `AutoApproved`) passe « En échec ».
+- **Rangement retenté automatiquement** : 3 essais au total, 5 min puis 30 min d'attente (`ImportAttempts`, `RetryImportAfter`). Toutes les erreurs sont retentées (un partage NAS démonté ou un disque plein peuvent se résoudre seuls) ; les admins ne sont prévenus qu'à l'échec définitif. « Relancer » remet le compteur à zéro.
+- **Demandes qui stagnent** : tâche quotidienne « Ménage des demandes » ; une demande envoyée, terminée sur Torbox ou rangée depuis plus de `StaleRequestDays` jours (3) est signalée une seule fois aux admins (`StaleNotifiedAt`), avec un avertissement dans l'onglet Administration.
+- **Annulation** : nouveau statut `Cancelled`. L'utilisateur annule sa demande en attente ou en échec ; l'admin annule toute demande en cours sauf pendant un envoi ou un téléchargement vers le NAS, avec suppression facultative du torrent sur Torbox (seulement si aucune autre demande en cours ne l'utilise). L'admin peut aussi **marquer disponible** une demande que Jellyfin n'a pas reconnue.
+- **Liste des épisodes** : `GET Media/Episodes` lit les épisodes de la saison via les fournisseurs de métadonnées de Jellyfin (un par un jusqu'au premier absent ; TMDB garde la saison en cache) et marque ceux déjà présents. Saisie du numéro en repli.
+- **Discord** : option `DiscordSendUserNotifications` (cochée par défaut, comme avant) ; les notifications d'un utilisateur sont préfixées de son nom.
+- **Ménage de la base** : demandes disponibles, refusées ou annulées supprimées après `RequestRetentionDays` (180) jours, notifications lues après `NotificationRetentionDays` (90). Demandes en cours ou en échec jamais supprimées.
+- **Dépôt Jellyfin** : `package.ps1 -SourceUrlBase` génère un `manifest.json` (dernière version, MD5) ; la release GitHub le joint. Nécessite un accès sans authentification : dépôt GitHub public (c'est le cas depuis le 2026-11-07), ou serveur web local.
+- **Tests de l'interface** : `WebUiTests` exécute `app.js` et les scripts des pages de configuration avec Jint (fonctions pures exposées dans `C411Ui` quand il n'y a pas de DOM).
+- Schéma SQLite v4 : colonnes `MissingOnTorboxSince`, `ImportAttempts`, `RetryImportAfter`, `StaleNotifiedAt` (migration automatique).
+
+**Non vérifié à ce stade** (nécessite le serveur réel) :
+1. Valeurs réelles de `download_state` chez Torbox pour un torrent en erreur ou sans source.
+2. Torrent mis en file d'attente par Torbox (limite du plan atteint) : s'il n'apparaît pas dans `torrents/mylist`, il serait considéré comme disparu après 1 h.
+3. Durée de la lecture des épisodes d'une saison via le fournisseur TMDB de Jellyfin (cache de saison supposé).
+4. Installation depuis le dépôt de plugins (dépôt GitHub rendu public le 2026-11-07 ; premier manifest joint à la release 0.8.0).
+
+## 10. Historique des versions
+
+| Version | Contenu |
+|---|---|
+| 0.1.0 | Recherche C411 via Prowlarr, demandes, validation admin et automatique, envoi Torbox, suivi (§ 6) |
+| 0.3.x | Téléchargement et rangement automatiques (§ 7) ; Sqlite épinglé sur la version du serveur |
+| 0.4.0 | Livres, BD, comics et presse (§ 8) ; correctifs de l'audit de sécurité |
+| 0.5.0 | Page utilisateurs servie sur `/demandes/ui` |
+| 0.6.x | Torrents hors sujet écartés, bouton « Actualiser », tests en CI, rattachement d'un torrent déjà sur Torbox |
+| 0.7.0 | Plus de doublons dans la recherche, filtre par année, recherche par identifiant (TMDB / IMDb) |
+| 0.8.0 | Fiabilité, suivi, annulation, liste des épisodes, ménage, dépôt de plugins (§ 9) |

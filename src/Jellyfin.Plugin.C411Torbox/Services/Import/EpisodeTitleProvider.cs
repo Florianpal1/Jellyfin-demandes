@@ -14,12 +14,22 @@ public interface IEpisodeTitleProvider
 {
     Task<IReadOnlyDictionary<(int Season, int Episode), string>> GetTitlesAsync(
         IReadOnlyDictionary<string, string> seriesProviderIds, IEnumerable<(int Season, int Episode)> episodes, CancellationToken ct);
+
+    /// <summary>
+    /// Épisodes connus d'une saison (numéro et titre, titre null s'il n'est pas encore connu), dans l'ordre.
+    /// Liste vide si les fournisseurs de métadonnées ne connaissent pas la saison.
+    /// </summary>
+    Task<IReadOnlyList<(int Episode, string? Title)>> GetSeasonEpisodesAsync(
+        IReadOnlyDictionary<string, string> seriesProviderIds, int season, CancellationToken ct);
 }
 
 /// <summary>Titres lus via les fournisseurs de métadonnées de Jellyfin (TMDB), en français.</summary>
 internal sealed class EpisodeTitleProvider : IEpisodeTitleProvider
 {
     private static readonly TimeSpan PerEpisodeTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>Garde-fou : nombre max d'épisodes lus pour une saison (émissions quotidiennes, animés…).</summary>
+    private const int MaxEpisodesPerSeason = 200;
 
     private readonly IProviderManager _providerManager;
     private readonly ILogger<EpisodeTitleProvider> _logger;
@@ -36,39 +46,68 @@ internal sealed class EpisodeTitleProvider : IEpisodeTitleProvider
         var titles = new Dictionary<(int, int), string>();
         foreach (var (season, episode) in episodes.Distinct())
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(PerEpisodeTimeout);
-            try
+            var (_, name) = await LookupAsync(seriesProviderIds, season, episode, ct).ConfigureAwait(false);
+            if (name is not null)
             {
-                var info = new EpisodeInfo
-                {
-                    ParentIndexNumber = season,
-                    IndexNumber = episode,
-                    MetadataLanguage = "fr",
-                    MetadataCountryCode = "FR",
-                };
-                foreach (var (key, value) in seriesProviderIds)
-                {
-                    info.SeriesProviderIds[key] = value;
-                }
-
-                var results = await _providerManager.GetRemoteSearchResults<Episode, EpisodeInfo>(
-                    new RemoteSearchQuery<EpisodeInfo> { SearchInfo = info, IncludeDisabledProviders = true },
-                    timeout.Token).ConfigureAwait(false);
-                var name = results.Select(r => r.Name).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n));
-                if (name is not null && !IsPlaceholder(name, episode))
-                {
-                    titles[(season, episode)] = name.Trim();
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
-            {
-                // Titre facultatif : on range quand même, sans le titre.
-                _logger.LogDebug(ex, "Titre de l'épisode S{Season}E{Episode} introuvable", season, episode);
+                titles[(season, episode)] = name;
             }
         }
 
         return titles;
+    }
+
+    public async Task<IReadOnlyList<(int Episode, string? Title)>> GetSeasonEpisodesAsync(
+        IReadOnlyDictionary<string, string> seriesProviderIds, int season, CancellationToken ct)
+    {
+        // Les fournisseurs n'exposent pas la liste d'une saison : on lit les épisodes un par un jusqu'au premier absent.
+        // TMDB met la saison en cache après le premier épisode : les suivants sont immédiats.
+        var episodes = new List<(int, string?)>();
+        for (int episode = 1; episode <= MaxEpisodesPerSeason; episode++)
+        {
+            var (found, name) = await LookupAsync(seriesProviderIds, season, episode, ct).ConfigureAwait(false);
+            if (!found)
+            {
+                break;
+            }
+
+            episodes.Add((episode, name));
+        }
+
+        return episodes;
+    }
+
+    /// <summary>Épisode connu des fournisseurs, et son titre (null s'il n'est pas encore connu).</summary>
+    private async Task<(bool Found, string? Title)> LookupAsync(
+        IReadOnlyDictionary<string, string> seriesProviderIds, int season, int episode, CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(PerEpisodeTimeout);
+        try
+        {
+            var info = new EpisodeInfo
+            {
+                ParentIndexNumber = season,
+                IndexNumber = episode,
+                MetadataLanguage = "fr",
+                MetadataCountryCode = "FR",
+            };
+            foreach (var (key, value) in seriesProviderIds)
+            {
+                info.SeriesProviderIds[key] = value;
+            }
+
+            var results = (await _providerManager.GetRemoteSearchResults<Episode, EpisodeInfo>(
+                new RemoteSearchQuery<EpisodeInfo> { SearchInfo = info, IncludeDisabledProviders = true },
+                timeout.Token).ConfigureAwait(false)).ToList();
+            var name = results.Select(r => r.Name).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n));
+            return (results.Count > 0, name is not null && !IsPlaceholder(name, episode) ? name.Trim() : null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Titre facultatif : on range quand même, sans le titre.
+            _logger.LogDebug(ex, "Épisode S{Season}E{Episode} introuvable", season, episode);
+            return (false, null);
+        }
     }
 
     /// <summary>TMDB renvoie « Épisode 3 » quand le titre n'est pas encore connu : inutile dans le nom de fichier.</summary>
