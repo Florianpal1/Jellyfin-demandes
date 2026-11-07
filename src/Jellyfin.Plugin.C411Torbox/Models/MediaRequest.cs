@@ -88,4 +88,16 @@ public class MediaRequest
 
     /// <summary>Pour un pack de saison : épisodes déjà présents au moment de la demande.</summary>
     public int EpisodesInLibraryAtRequest { get; set; }
+
+    /// <summary>Première vérification où le torrent ne figurait plus sur le compte Torbox (null s'il y est).</summary>
+    public DateTime? MissingOnTorboxSince { get; set; }
+
+    /// <summary>Tentatives de rangement automatiques déjà faites (remis à zéro par « Relancer »).</summary>
+    public int ImportAttempts { get; set; }
+
+    /// <summary>Prochaine tentative de rangement automatique (null : dès que possible).</summary>
+    public DateTime? RetryImportAfter { get; set; }
+
+    /// <summary>Date à laquelle les admins ont été prévenus que la demande stagne (null : pas encore).</summary>
+    public DateTime? StaleNotifiedAt { get; set; }
 }

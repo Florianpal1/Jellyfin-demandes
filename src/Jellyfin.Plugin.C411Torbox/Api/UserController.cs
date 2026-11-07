@@ -1,11 +1,13 @@
 using System;
 using System.ComponentModel.DataAnnotations;
 using System.Net.Http;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.C411Torbox.Data;
 using Jellyfin.Plugin.C411Torbox.Models;
 using Jellyfin.Plugin.C411Torbox.Services;
+using Jellyfin.Plugin.C411Torbox.Services.Import;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -24,6 +26,8 @@ public class UserController : C411TorboxControllerBase
     private readonly RequestService _requests;
     private readonly RequestRepository _repository;
     private readonly SearchRateLimiter _rateLimiter;
+    private readonly IEpisodeTitleProvider _episodes;
+    private readonly ILibraryLookup _library;
     private readonly ILogger<UserController> _logger;
 
     public UserController(
@@ -32,6 +36,8 @@ public class UserController : C411TorboxControllerBase
         RequestService requests,
         RequestRepository repository,
         SearchRateLimiter rateLimiter,
+        IEpisodeTitleProvider episodes,
+        ILibraryLookup library,
         ILogger<UserController> logger)
     {
         _metadata = metadata;
@@ -39,6 +45,8 @@ public class UserController : C411TorboxControllerBase
         _requests = requests;
         _repository = repository;
         _rateLimiter = rateLimiter;
+        _episodes = episodes;
+        _library = library;
         _logger = logger;
     }
 
@@ -61,6 +69,27 @@ public class UserController : C411TorboxControllerBase
         }
 
         return JsonOk(await _metadata.SearchAsync(query.Trim(), kind, year, ct).ConfigureAwait(false));
+    }
+
+    /// <summary>Épisodes d'une saison d'une série (fiche du cache serveur), avec ceux déjà présents dans la bibliothèque.</summary>
+    [HttpGet("Media/Episodes")]
+    public async Task<ActionResult> SeasonEpisodes([FromQuery, Required] string mediaId, [FromQuery] int season, CancellationToken ct)
+    {
+        var media = _metadata.Get(mediaId ?? string.Empty);
+        if (media is null)
+        {
+            return ErrorResult(StatusCodes.Status410Gone, "Cette fiche a expiré : relancez la recherche du titre.");
+        }
+
+        if (media.Kind != MediaKind.Series || season is < 0 or > 200)
+        {
+            return ErrorResult(StatusCodes.Status400BadRequest, "Saison invalide.");
+        }
+
+        var ids = LibraryLookup.FilterIds(media.ProviderIds);
+        var episodes = await _episodes.GetSeasonEpisodesAsync(ids, season, ct).ConfigureAwait(false);
+        var present = _library.GetEpisodeNumbers(ids, season);
+        return JsonOk(episodes.Select(e => new EpisodeListItem { Episode = e.Episode, Title = e.Title, InLibrary = present.Contains(e.Episode) }));
     }
 
     /// <summary>Recherche des torrents C411 pour un média (film, saison, épisode ou livre).</summary>
@@ -123,6 +152,25 @@ public class UserController : C411TorboxControllerBase
         {
             _logger.LogWarning(ex, "Création de demande en échec");
             return ErrorResult(StatusCodes.Status502BadGateway, ex.Message);
+        }
+    }
+
+    /// <summary>Annule une de mes demandes tant qu'elle n'est pas partie sur Torbox (en attente ou en échec).</summary>
+    [HttpPost("Requests/{id}/Cancel")]
+    public async Task<ActionResult> CancelMyRequest([FromRoute] long id, CancellationToken ct)
+    {
+        if (!IsRealUser)
+        {
+            return ErrorResult(StatusCodes.Status403Forbidden, "Une demande doit être annulée par un utilisateur connecté.");
+        }
+
+        try
+        {
+            return JsonOk(await _requests.CancelAsync(id, CurrentUserId, CurrentUserName, deleteFromTorbox: false, ct).ConfigureAwait(false));
+        }
+        catch (RequestException ex)
+        {
+            return ErrorResult(ex.StatusCode, ex.Message);
         }
     }
 

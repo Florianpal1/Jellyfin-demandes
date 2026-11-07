@@ -175,6 +175,8 @@ tr.cached { background: rgba(0, 164, 220, .08); }
 .pill.auto { border-color: var(--ok); color: var(--ok); }
 .pill.st-Pending { border-color: var(--warn); color: var(--warn); }
 .pill.st-Rejected, .pill.st-Failed, .pill.st-ImportFailed { border-color: var(--bad); color: var(--bad); }
+.pill.st-Cancelled { opacity: 0.7; }
+.stale { color: var(--warn); font-size: 0.85em; }
 .pill.st-Available { background: var(--ok); border-color: var(--ok); color: #fff; }
 .pill.st-SentToTorbox, .pill.st-DownloadingOnTorbox, .pill.st-CompletedOnTorbox, .pill.st-Importing, .pill.st-Imported, .pill.st-Approved, .pill.st-AutoApproved { border-color: var(--accent); color: var(--accent); }
 

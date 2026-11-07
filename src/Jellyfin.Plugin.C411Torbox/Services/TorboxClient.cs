@@ -21,6 +21,19 @@ public sealed record TorboxTorrent(long Id, string? Hash, string? Name, double P
 /// <summary>Fichier d'un torrent Torbox. <paramref name="Name"/> contient le chemin relatif (dossiers du torrent compris).</summary>
 public sealed record TorboxFile(long Id, string Name, long Size);
 
+/// <summary>Lecture du champ « download_state » de Torbox (valeurs libres : « downloading », « stalled (no seeds) », « error »…).</summary>
+public static class TorboxStates
+{
+    /// <summary>Torrent en erreur sur Torbox : il ne se terminera pas tout seul.</summary>
+    public static bool IsError(string? state)
+        => state is not null
+            && (state.Contains("error", StringComparison.OrdinalIgnoreCase) || state.Contains("fail", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Torrent bloqué faute de sources : il peut repartir si des seeders reviennent.</summary>
+    public static bool IsStalled(string? state)
+        => state is not null && state.Contains("stalled", StringComparison.OrdinalIgnoreCase);
+}
+
 /// <summary>Erreur renvoyée par l'API Torbox.</summary>
 public class TorboxException : Exception
 {

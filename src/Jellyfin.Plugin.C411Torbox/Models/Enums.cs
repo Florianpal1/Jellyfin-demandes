@@ -56,6 +56,9 @@ public enum RequestStatus
 
     /// <summary>L'envoi à Torbox a échoué (renvoi manuel possible).</summary>
     Failed,
+
+    /// <summary>Annulée par le demandeur ou par un administrateur.</summary>
+    Cancelled,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<AutoApprovalReason>))]

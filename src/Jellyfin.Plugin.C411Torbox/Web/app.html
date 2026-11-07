@@ -54,7 +54,11 @@
                             <span id="seriesFields" hidden>
                                 <label>Saison <input id="seasonInput" type="number" min="0" max="200" value="1"></label>
                                 <label class="check"><input id="episodeToggle" type="checkbox"> Épisode précis</label>
-                                <label id="episodeLabel" hidden>Épisode <input id="episodeInput" type="number" min="1" max="2000" value="1"></label>
+                                <label id="episodeLabel" hidden>Épisode
+                                    <select id="episodeSelect" hidden></select>
+                                    <input id="episodeInput" type="number" min="1" max="2000" value="1">
+                                    <span id="episodeHint" class="muted"></span>
+                                </label>
                             </span>
                             <button type="submit" class="primary">Chercher les torrents</button>
                             <button type="button" id="detailClose" class="ghost">Fermer</button>
@@ -80,7 +84,7 @@
             </div>
             <div class="table-wrap">
                 <table id="mineTable">
-                    <thead><tr><th>Média</th><th>Torrent</th><th>Taille</th><th>Statut</th><th>Date</th></tr></thead>
+                    <thead><tr><th>Média</th><th>Torrent</th><th>Taille</th><th>Statut</th><th>Date</th><th></th></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>
@@ -97,9 +101,11 @@
                 <label>Statut
                     <select id="adminFilter">
                         <option value="Pending">En attente</option>
+                        <option value="active">En cours</option>
                         <option value="Failed">En échec</option>
                         <option value="Importing">Vers le NAS</option>
                         <option value="ImportFailed">Rangement en échec</option>
+                        <option value="Cancelled">Annulées</option>
                         <option value="">Toutes</option>
                     </select>
                 </label>

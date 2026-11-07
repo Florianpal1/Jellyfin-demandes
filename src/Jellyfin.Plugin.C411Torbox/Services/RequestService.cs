@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.C411Torbox.Data;
@@ -24,6 +23,10 @@ public class RequestException : Exception
 }
 
 /// <summary>Cycle de vie des demandes : création, auto-validation, validation admin, envoi Torbox, suivi.</summary>
+/// <remarks>
+/// Les transitions d'état se font sous <see cref="_lock"/>, sans aucun appel réseau : l'envoi à Torbox et les
+/// notifications (webhook Discord) se font hors du verrou, pour qu'un Torbox lent ne bloque pas les autres demandes.
+/// </remarks>
 public class RequestService
 {
     /// <summary>Statuts où le média peut apparaître dans la bibliothèque. Pas « Importing » : l'import en cours finit d'abord.</summary>
@@ -36,14 +39,50 @@ public class RequestService
         RequestStatus.ImportFailed,
     ];
 
+    /// <summary>Statuts d'une demande validée en attente de son envoi à Torbox (et demandes du même torrent qui suivent).</summary>
+    private static readonly RequestStatus[] SendableStatuses =
+    [
+        RequestStatus.Pending,
+        RequestStatus.Approved,
+        RequestStatus.AutoApproved,
+        RequestStatus.Failed,
+    ];
+
+    /// <summary>Statuts qu'un administrateur peut annuler (pas pendant un envoi à Torbox ni un téléchargement vers le NAS).</summary>
+    private static readonly RequestStatus[] AdminCancellableStatuses =
+    [
+        RequestStatus.Pending,
+        RequestStatus.Failed,
+        .. SentStatuses,
+    ];
+
+    /// <summary>Statuts suivis pour la détection des demandes qui stagnent.</summary>
+    private static readonly RequestStatus[] StaleWatchedStatuses =
+    [
+        RequestStatus.SentToTorbox,
+        RequestStatus.DownloadingOnTorbox,
+        RequestStatus.CompletedOnTorbox,
+        RequestStatus.Imported,
+    ];
+
+    /// <summary>
+    /// Délai avant de considérer qu'un torrent absent de la liste Torbox a vraiment disparu
+    /// (laisse le temps à Torbox de lister un torrent tout juste ajouté).
+    /// </summary>
+    public static readonly TimeSpan MissingOnTorboxGracePeriod = TimeSpan.FromHours(1);
+
+    /// <summary>Délai minimal entre deux actualisations manuelles (tous utilisateurs confondus) : ménage l'API Torbox.</summary>
+    public static readonly TimeSpan ManualRefreshInterval = TimeSpan.FromSeconds(30);
+
     private readonly RequestRepository _repository;
     private readonly SearchResultCache _cache;
-    private readonly IndexerProvider _indexers;
+    private readonly TorboxSubmitter _submitter;
     private readonly TorboxClient _torbox;
     private readonly ILibraryLookup _library;
     private readonly INotificationService _notifications;
     private readonly IConfigProvider _config;
     private readonly ILogger<RequestService> _logger;
+    private readonly TimeProvider _time;
 
     // Sérialise les transitions d'état : évite par exemple un double envoi si deux admins valident en même temps.
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -51,8 +90,68 @@ public class RequestService
     private readonly object _manualRefreshGate = new();
     private DateTime _lastManualRefresh = DateTime.MinValue;
 
-    /// <summary>Délai minimal entre deux actualisations manuelles (tous utilisateurs confondus) : ménage l'API Torbox.</summary>
-    public static readonly TimeSpan ManualRefreshInterval = TimeSpan.FromSeconds(30);
+    public RequestService(
+        RequestRepository repository,
+        SearchResultCache cache,
+        TorboxSubmitter submitter,
+        TorboxClient torbox,
+        ILibraryLookup library,
+        INotificationService notifications,
+        IConfigProvider config,
+        ILogger<RequestService> logger)
+        : this(repository, cache, submitter, torbox, library, notifications, config, logger, TimeProvider.System)
+    {
+    }
+
+    internal RequestService(
+        RequestRepository repository,
+        SearchResultCache cache,
+        TorboxSubmitter submitter,
+        TorboxClient torbox,
+        ILibraryLookup library,
+        INotificationService notifications,
+        IConfigProvider config,
+        ILogger<RequestService> logger,
+        TimeProvider time)
+    {
+        _repository = repository;
+        _cache = cache;
+        _submitter = submitter;
+        _torbox = torbox;
+        _library = library;
+        _notifications = notifications;
+        _config = config;
+        _logger = logger;
+        _time = time;
+    }
+
+    private DateTime Now => _time.GetUtcNow().UtcDateTime;
+
+    public static string Describe(MediaRequest r) => r.Scope switch
+    {
+        RequestScope.Movie or RequestScope.Book => r.Year.HasValue ? string.Create(CultureInfo.InvariantCulture, $"{r.MediaTitle} ({r.Year})") : r.MediaTitle,
+        RequestScope.Episode => string.Create(CultureInfo.InvariantCulture, $"{r.MediaTitle} S{r.Season:00}E{r.Episode:00}"),
+        _ => string.Create(CultureInfo.InvariantCulture, $"{r.MediaTitle} saison {r.Season}"),
+    };
+
+    /// <summary>Libellé d'un statut, tel qu'affiché dans la page.</summary>
+    public static string StatusLabel(RequestStatus status) => status switch
+    {
+        RequestStatus.Pending => "en attente de validation",
+        RequestStatus.Approved => "validée",
+        RequestStatus.AutoApproved => "auto-validée",
+        RequestStatus.Rejected => "refusée",
+        RequestStatus.SentToTorbox => "envoyée à Torbox",
+        RequestStatus.DownloadingOnTorbox => "en téléchargement sur Torbox",
+        RequestStatus.CompletedOnTorbox => "terminée sur Torbox",
+        RequestStatus.Importing => "en téléchargement vers le NAS",
+        RequestStatus.Imported => "rangée, en attente de Jellyfin",
+        RequestStatus.ImportFailed => "rangement en échec",
+        RequestStatus.Available => "disponible",
+        RequestStatus.Failed => "en échec",
+        RequestStatus.Cancelled => "annulée",
+        _ => status.ToString(),
+    };
 
     /// <summary>
     /// Actualisation demandée depuis l'interface (bouton « Actualiser ») : même travail que la tâche planifiée
@@ -63,7 +162,7 @@ public class RequestService
     {
         lock (_manualRefreshGate)
         {
-            var now = DateTime.UtcNow;
+            var now = Now;
             if (now - _lastManualRefresh < ManualRefreshInterval)
             {
                 return false;
@@ -85,33 +184,6 @@ public class RequestService
         return true;
     }
 
-    public RequestService(
-        RequestRepository repository,
-        SearchResultCache cache,
-        IndexerProvider indexers,
-        TorboxClient torbox,
-        ILibraryLookup library,
-        INotificationService notifications,
-        IConfigProvider config,
-        ILogger<RequestService> logger)
-    {
-        _repository = repository;
-        _cache = cache;
-        _indexers = indexers;
-        _torbox = torbox;
-        _library = library;
-        _notifications = notifications;
-        _config = config;
-        _logger = logger;
-    }
-
-    public static string Describe(MediaRequest r) => r.Scope switch
-    {
-        RequestScope.Movie or RequestScope.Book => r.Year.HasValue ? string.Create(CultureInfo.InvariantCulture, $"{r.MediaTitle} ({r.Year})") : r.MediaTitle,
-        RequestScope.Episode => string.Create(CultureInfo.InvariantCulture, $"{r.MediaTitle} S{r.Season:00}E{r.Episode:00}"),
-        _ => string.Create(CultureInfo.InvariantCulture, $"{r.MediaTitle} saison {r.Season}"),
-    };
-
     public async Task<MediaRequest> CreateAsync(Guid userId, string userName, string resultId, CancellationToken ct)
     {
         var entry = _cache.Get(resultId)
@@ -119,6 +191,9 @@ public class RequestService
         var ctx = entry.Context;
         var res = entry.Result;
 
+        var notices = new List<Notice>();
+        MediaRequest request;
+        bool send = false;
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -145,7 +220,7 @@ public class RequestService
             }
 
             var reason = ApprovalRules.Evaluate(ctx.Scope, res.SizeBytes, res.Seeders, res.IsCachedOnTorbox, _config.Current);
-            var request = new MediaRequest
+            request = new MediaRequest
             {
                 UserId = userId,
                 UserName = userName,
@@ -173,7 +248,8 @@ public class RequestService
                 EpisodesInLibraryAtRequest = episodesAtRequest,
             };
 
-            // Même torrent déjà demandé par quelqu'un d'autre : on suit la demande existante.
+            // Même torrent déjà demandé par quelqu'un d'autre : on suit la demande existante (son envoi éventuel
+            // en cours mettra aussi celle-ci à jour).
             var sibling = siblings.FirstOrDefault();
             if (sibling is not null)
             {
@@ -182,87 +258,209 @@ public class RequestService
                 request.TorboxTorrentId = sibling.TorboxTorrentId;
                 request.TorboxProgress = sibling.TorboxProgress;
                 _repository.Insert(request);
-                await _notifications.NotifyUserAsync(userId, $"« {Describe(request)} » a déjà été demandé : votre demande suit la demande existante.", request.Id, ct).ConfigureAwait(false);
-                return request;
+                notices.Add(Notice.User(request, $"« {Describe(request)} » a déjà été demandé : votre demande suit la demande existante."));
             }
-
-            if (reason == AutoApprovalReason.None)
+            else if (reason == AutoApprovalReason.None)
             {
                 request.Status = RequestStatus.Pending;
                 _repository.Insert(request);
-                await _notifications.NotifyAdminsAsync($"Nouvelle demande à valider : « {Describe(request)} » par {userName} ({FormatSize(request.SizeBytes)}, {request.Seeders} seeders).", request.Id, ct).ConfigureAwait(false);
-                return request;
+                notices.Add(Notice.Admins(request, $"Nouvelle demande à valider : « {Describe(request)} » par {userName} ({FormatSize(request.SizeBytes)}, {request.Seeders} seeders)."));
             }
-
-            request.Status = RequestStatus.AutoApproved;
-            _repository.Insert(request);
-            var why = reason == AutoApprovalReason.Cached ? "déjà en cache Torbox" : "sous le seuil de taille";
-            await _notifications.NotifyAdminsAsync($"Demande auto-validée ({why}) : « {Describe(request)} » par {userName}.", request.Id, ct).ConfigureAwait(false);
-            // Pas d'annulation : une déconnexion du navigateur ne doit pas laisser la demande à moitié envoyée.
-            await SendToTorboxAsync(request, entry.Source, CancellationToken.None).ConfigureAwait(false);
-            return request;
+            else
+            {
+                request.Status = RequestStatus.AutoApproved;
+                _repository.Insert(request);
+                send = true;
+                var why = reason == AutoApprovalReason.Cached ? "déjà en cache Torbox" : "sous le seuil de taille";
+                notices.Add(Notice.Admins(request, $"Demande auto-validée ({why}) : « {Describe(request)} » par {userName}."));
+            }
         }
         finally
         {
             _lock.Release();
         }
+
+        await NotifyAsync(notices).ConfigureAwait(false);
+        if (!send)
+        {
+            return request;
+        }
+
+        // Pas d'annulation : une déconnexion du navigateur ne doit pas laisser la demande à moitié envoyée.
+        await SendToTorboxAsync(request, entry.Source, CancellationToken.None).ConfigureAwait(false);
+        return _repository.Get(request.Id) ?? request;
     }
 
     public async Task<MediaRequest> ApproveAsync(long id, string adminName, CancellationToken ct)
     {
+        MediaRequest request;
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var request = _repository.Get(id) ?? throw new RequestException("Demande introuvable.", 404);
+            request = _repository.Get(id) ?? throw new RequestException("Demande introuvable.", 404);
             if (request.Status is not (RequestStatus.Pending or RequestStatus.Failed))
             {
                 throw new RequestException("Seule une demande en attente ou en échec peut être validée.", 409);
             }
 
+            // « Approved » réserve la demande : un second admin reçoit une erreur 409 pendant l'envoi.
             request.Status = RequestStatus.Approved;
             request.ReviewedBy = adminName;
-            request.ReviewedAt = DateTime.UtcNow;
+            request.ReviewedAt = Now;
             request.LastError = null;
             _repository.Update(request);
-            await SendToTorboxAsync(request, null, CancellationToken.None).ConfigureAwait(false);
-            return request;
         }
         finally
         {
             _lock.Release();
         }
+
+        await SendToTorboxAsync(request, null, CancellationToken.None).ConfigureAwait(false);
+        return _repository.Get(id) ?? request;
     }
 
     public async Task<MediaRequest> RejectAsync(long id, string adminName, string? reason, CancellationToken ct)
     {
+        var notices = new List<Notice>();
+        MediaRequest request;
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var request = _repository.Get(id) ?? throw new RequestException("Demande introuvable.", 404);
+            request = _repository.Get(id) ?? throw new RequestException("Demande introuvable.", 404);
             if (request.Status is not (RequestStatus.Pending or RequestStatus.Failed))
             {
                 throw new RequestException("Seule une demande en attente ou en échec peut être refusée.", 409);
             }
 
-            var targets = SameTorrent(request, RequestStatus.Pending, RequestStatus.Failed);
             var cleanReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
-            foreach (var r in targets)
+            foreach (var r in SameTorrent(request, RequestStatus.Pending, RequestStatus.Failed))
             {
                 r.Status = RequestStatus.Rejected;
                 r.ReviewedBy = adminName;
-                r.ReviewedAt = DateTime.UtcNow;
+                r.ReviewedAt = Now;
                 r.RejectReason = cleanReason;
                 _repository.Update(r);
-                var msg = $"Votre demande « {Describe(r)} » a été refusée" + (cleanReason is null ? "." : $" : {cleanReason}");
-                await _notifications.NotifyUserAsync(r.UserId, msg, r.Id, ct).ConfigureAwait(false);
+                notices.Add(Notice.User(r, $"Votre demande « {Describe(r)} » a été refusée" + (cleanReason is null ? "." : $" : {cleanReason}")));
             }
-
-            return request;
         }
         finally
         {
             _lock.Release();
         }
+
+        await NotifyAsync(notices).ConfigureAwait(false);
+        return request;
+    }
+
+    /// <summary>
+    /// Annule une demande. Un utilisateur annule sa propre demande tant qu'elle n'est pas partie sur Torbox
+    /// (<paramref name="userId"/> renseigné) ; un administrateur annule toute demande en cours, sauf pendant
+    /// un envoi à Torbox ou un téléchargement vers le NAS, et peut supprimer le torrent de Torbox.
+    /// </summary>
+    public async Task<MediaRequest> CancelAsync(long id, Guid? userId, string actorName, bool deleteFromTorbox, CancellationToken ct)
+    {
+        var notices = new List<Notice>();
+        MediaRequest request;
+        long? torrentToDelete = null;
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            request = _repository.Get(id) is { } found && (!userId.HasValue || found.UserId == userId.Value)
+                ? found
+                : throw new RequestException("Demande introuvable.", 404);
+
+            if (userId.HasValue && request.Status is not (RequestStatus.Pending or RequestStatus.Failed))
+            {
+                throw new RequestException("Seule une demande en attente ou en échec peut être annulée : elle est déjà partie sur Torbox.", 409);
+            }
+
+            if (!AdminCancellableStatuses.Contains(request.Status))
+            {
+                throw new RequestException(request.Status == RequestStatus.Importing
+                    ? "Téléchargement vers le NAS en cours : attendez la fin avant d'annuler."
+                    : "Cette demande ne peut plus être annulée.", 409);
+            }
+
+            request.Status = RequestStatus.Cancelled;
+            request.LastError = null;
+            request.RetryImportAfter = null;
+            if (!userId.HasValue)
+            {
+                request.ReviewedBy = actorName;
+                request.ReviewedAt = Now;
+            }
+
+            _repository.Update(request);
+
+            // Le torrent n'est supprimé que si aucune autre demande en cours n'en a besoin.
+            if (deleteFromTorbox && !userId.HasValue && request.TorboxTorrentId is { } torrentId
+                && !_repository.GetActive().Any(r => r.TorboxTorrentId == torrentId || SameHash(r, request)))
+            {
+                torrentToDelete = torrentId;
+            }
+
+            if (!userId.HasValue && request.UserId != Guid.Empty)
+            {
+                notices.Add(Notice.User(request, $"Votre demande « {Describe(request)} » a été annulée par un administrateur."));
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        _logger.LogInformation("Demande {Id} annulée par {Actor}", request.Id, actorName);
+        if (torrentToDelete is { } tid)
+        {
+            try
+            {
+                await _torbox.DeleteTorrentAsync(tid, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (TorboxException ex)
+            {
+                _logger.LogWarning(ex, "Suppression du torrent {TorrentId} sur Torbox impossible", tid);
+                await UpdateAsync(request.Id, r => r.LastError = "Suppression sur Torbox impossible : " + ex.Message).ConfigureAwait(false);
+            }
+        }
+
+        await NotifyAsync(notices).ConfigureAwait(false);
+        return _repository.Get(id) ?? request;
+    }
+
+    /// <summary>
+    /// Passe une demande (et celles du même torrent) en « Disponible » à la main : média arrivé dans Jellyfin
+    /// sans être reconnu (titre ou identifiants différents).
+    /// </summary>
+    public async Task<MediaRequest> MarkAvailableAsync(long id, string adminName, CancellationToken ct)
+    {
+        var notices = new List<Notice>();
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var request = _repository.Get(id) ?? throw new RequestException("Demande introuvable.", 404);
+            if (!SentStatuses.Contains(request.Status))
+            {
+                throw new RequestException("Seule une demande envoyée à Torbox peut être marquée disponible.", 409);
+            }
+
+            foreach (var r in SameTorrent(request, SentStatuses))
+            {
+                r.Status = RequestStatus.Available;
+                r.TorboxProgress = 1;
+                r.LastError = null;
+                r.RetryImportAfter = null;
+                r.ReviewedBy ??= adminName;
+                _repository.Update(r);
+                notices.Add(Notice.User(r, $"« {Describe(r)} » est disponible dans Jellyfin."));
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        await NotifyAsync(notices).ConfigureAwait(false);
+        return _repository.Get(id)!;
     }
 
     /// <summary>Relance le téléchargement vers le NAS d'une demande dont l'import a échoué (et des demandes du même torrent).</summary>
@@ -282,6 +480,8 @@ public class RequestService
                 r.Status = RequestStatus.CompletedOnTorbox;
                 r.LastError = null;
                 r.ImportProgress = null;
+                r.ImportAttempts = 0;
+                r.RetryImportAfter = null;
                 _repository.Update(r);
             }
 
@@ -317,11 +517,28 @@ public class RequestService
         }
     }
 
-    /// <summary>Au démarrage : un import interrompu par un arrêt du serveur repart (le fichier partiel est repris).</summary>
-    public Task ResetInterruptedImportsAsync(CancellationToken ct)
-        => UpdateActiveAsync(r => r.Status == RequestStatus.Importing, r => r.Status = RequestStatus.CompletedOnTorbox, ct);
+    /// <summary>
+    /// Au démarrage du serveur : un import interrompu repart (le fichier partiel est repris) ; un envoi à Torbox
+    /// interrompu passe « En échec » pour qu'un admin le renvoie (aucun envoi ne peut être en cours à ce moment).
+    /// </summary>
+    public async Task RecoverInterruptedAsync(CancellationToken ct)
+    {
+        await UpdateActiveAsync(r => r.Status == RequestStatus.Importing, r => r.Status = RequestStatus.CompletedOnTorbox, ct).ConfigureAwait(false);
+        var interrupted = await UpdateActiveAsync(
+            r => r.Status is RequestStatus.Approved or RequestStatus.AutoApproved,
+            r =>
+            {
+                r.Status = RequestStatus.Failed;
+                r.LastError = "Envoi à Torbox interrompu par un arrêt du serveur : renvoyez la demande.";
+            },
+            ct).ConfigureAwait(false);
+        await NotifyAsync(interrupted.Select(r => Notice.Admins(r, $"Envoi à Torbox de « {Describe(r)} » interrompu par un arrêt du serveur : renvoyez la demande."))).ConfigureAwait(false);
+    }
 
-    /// <summary>Met à jour la progression Torbox des demandes envoyées.</summary>
+    /// <summary>
+    /// Met à jour la progression Torbox des demandes envoyées. Un torrent en erreur sur Torbox, ou absent du compte
+    /// pendant plus de <see cref="MissingOnTorboxGracePeriod"/>, passe la demande « En échec » (renvoi par un admin).
+    /// </summary>
     public async Task RefreshTorboxStatusAsync(CancellationToken ct)
     {
         var active = _repository.GetActive()
@@ -333,29 +550,56 @@ public class RequestService
         }
 
         var torrents = await _torbox.GetMyListAsync(ct).ConfigureAwait(false);
+        var notices = new List<Notice>();
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            var now = Now;
             foreach (var r in active)
             {
-                var t = torrents.FirstOrDefault(t => r.TorboxTorrentId.HasValue && t.Id == r.TorboxTorrentId.Value)
-                    ?? torrents.FirstOrDefault(t => r.InfoHash is not null && string.Equals(t.Hash, r.InfoHash, StringComparison.OrdinalIgnoreCase));
-                if (t is null)
-                {
-                    continue;
-                }
-
                 var current = _repository.Get(r.Id);
                 if (current is null || current.Status is not (RequestStatus.SentToTorbox or RequestStatus.DownloadingOnTorbox))
                 {
                     continue;
                 }
 
+                var t = torrents.FirstOrDefault(t => current.TorboxTorrentId.HasValue && t.Id == current.TorboxTorrentId.Value)
+                    ?? torrents.FirstOrDefault(t => current.InfoHash is not null && string.Equals(t.Hash, current.InfoHash, StringComparison.OrdinalIgnoreCase));
+                if (t is null)
+                {
+                    if (!current.TorboxTorrentId.HasValue && current.InfoHash is null)
+                    {
+                        continue;
+                    }
+
+                    current.MissingOnTorboxSince ??= now;
+                    if (now - current.MissingOnTorboxSince.Value >= MissingOnTorboxGracePeriod)
+                    {
+                        MarkTorboxFailed(current, "Le torrent n'est plus sur le compte Torbox (supprimé ou expiré) : renvoyez la demande.", notices);
+                    }
+
+                    _repository.Update(current);
+                    continue;
+                }
+
+                current.MissingOnTorboxSince = null;
                 current.TorboxTorrentId ??= t.Id;
+                if (TorboxStates.IsError(t.DownloadState))
+                {
+                    MarkTorboxFailed(current, $"Torbox signale une erreur ({t.DownloadState}) : renvoyez la demande pour relancer le torrent.", notices);
+                    _repository.Update(current);
+                    continue;
+                }
+
                 current.TorboxProgress = Math.Clamp(t.Progress, 0, 1);
                 current.Status = t.DownloadFinished || t.Progress >= 1
                     ? RequestStatus.CompletedOnTorbox
                     : RequestStatus.DownloadingOnTorbox;
+
+                // Torrent sans source : affiché sous le statut, la demande reste en cours.
+                current.LastError = TorboxStates.IsStalled(t.DownloadState) && current.Status == RequestStatus.DownloadingOnTorbox
+                    ? $"Torbox : {t.DownloadState}"
+                    : null;
                 _repository.Update(current);
             }
         }
@@ -363,11 +607,14 @@ public class RequestService
         {
             _lock.Release();
         }
+
+        await NotifyAsync(notices).ConfigureAwait(false);
     }
 
     /// <summary>Passe en « Disponible » les demandes dont le média est arrivé dans la bibliothèque.</summary>
     public async Task CheckAvailabilityAsync(CancellationToken ct)
     {
+        var notices = new List<Notice>();
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -388,14 +635,59 @@ public class RequestService
 
                 r.Status = RequestStatus.Available;
                 r.TorboxProgress = 1;
+                r.LastError = null;
+                r.RetryImportAfter = null;
                 _repository.Update(r);
-                await _notifications.NotifyUserAsync(r.UserId, $"« {Describe(r)} » est disponible dans Jellyfin.", r.Id, ct).ConfigureAwait(false);
+                notices.Add(Notice.User(r, $"« {Describe(r)} » est disponible dans Jellyfin."));
             }
         }
         finally
         {
             _lock.Release();
         }
+
+        await NotifyAsync(notices).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Prévient les admins (une seule fois par demande) des demandes toujours en cours après
+    /// <see cref="Configuration.PluginConfiguration.StaleRequestDays"/> jours : torrent sans source, média non reconnu par Jellyfin…
+    /// Renvoie les demandes signalées.
+    /// </summary>
+    public async Task<IReadOnlyList<MediaRequest>> CheckStaleAsync(CancellationToken ct)
+    {
+        var days = _config.Current.StaleRequestDays;
+        if (days <= 0)
+        {
+            return Array.Empty<MediaRequest>();
+        }
+
+        var now = Now;
+        var limit = now.AddDays(-days);
+        var stale = await UpdateActiveAsync(
+            r => StaleWatchedStatuses.Contains(r.Status) && r.StaleNotifiedAt is null && (r.ReviewedAt ?? r.CreatedAt) < limit,
+            r => r.StaleNotifiedAt = now,
+            ct).ConfigureAwait(false);
+        await NotifyAsync(stale.Select(r => Notice.Admins(
+            r,
+            $"« {Describe(r)} » ({r.UserName}) est toujours « {StatusLabel(r.Status)} » après {days} jours : vérifiez-la, puis marquez-la disponible ou annulez-la."))).ConfigureAwait(false);
+        return stale;
+    }
+
+    /// <summary>Supprime les demandes terminées et les notifications lues trop anciennes (durées réglées dans la configuration).</summary>
+    public (int Requests, int Notifications) Purge()
+    {
+        var cfg = _config.Current;
+        var now = Now;
+        var result = _repository.Purge(
+            cfg.RequestRetentionDays > 0 ? now.AddDays(-cfg.RequestRetentionDays) : DateTime.MinValue,
+            cfg.NotificationRetentionDays > 0 ? now.AddDays(-cfg.NotificationRetentionDays) : DateTime.MinValue);
+        if (result.Requests > 0 || result.Notifications > 0)
+        {
+            _logger.LogInformation("Ménage : {Requests} demande(s) et {Notifications} notification(s) supprimées", result.Requests, result.Notifications);
+        }
+
+        return result;
     }
 
     internal static Dictionary<string, string> ProviderIdsOf(MediaRequest r)
@@ -443,7 +735,19 @@ public class RequestService
             ? (bytes / (1024d * 1024 * 1024)).ToString("0.##", CultureInfo.GetCultureInfo("fr-FR")) + " Go"
             : (bytes / (1024d * 1024)).ToString("0", CultureInfo.GetCultureInfo("fr-FR")) + " Mo";
 
-    /// <summary>La demande et les autres demandes actives du même torrent dans l'un des statuts donnés.</summary>
+    private static bool SameHash(MediaRequest a, MediaRequest b)
+        => a.Id != b.Id && a.InfoHash is not null && string.Equals(a.InfoHash, b.InfoHash, StringComparison.OrdinalIgnoreCase);
+
+    private static void MarkTorboxFailed(MediaRequest r, string error, List<Notice> notices)
+    {
+        r.Status = RequestStatus.Failed;
+        r.LastError = error;
+        r.MissingOnTorboxSince = null;
+        notices.Add(Notice.Admins(r, $"« {Describe(r)} » : {error}"));
+        notices.Add(Notice.User(r, $"Le téléchargement de « {Describe(r)} » a échoué sur Torbox, un administrateur va le relancer."));
+    }
+
+    /// <summary>La demande et les autres demandes du même torrent dans l'un des statuts donnés.</summary>
     private List<MediaRequest> SameTorrent(MediaRequest request, params RequestStatus[] statuses)
     {
         var list = new List<MediaRequest> { request };
@@ -454,120 +758,134 @@ public class RequestService
             if (statuses.Contains(RequestStatus.Failed))
             {
                 list.AddRange(_repository.GetAll(RequestStatus.Failed)
-                    .Where(r => r.Id != request.Id && string.Equals(r.InfoHash, request.InfoHash, StringComparison.OrdinalIgnoreCase)));
+                    .Where(r => SameHash(r, request)));
             }
         }
 
         return list.DistinctBy(r => r.Id).ToList();
     }
 
-    /// <summary>Torrent du compte Torbox ayant cet infohash (null si absent, hash inconnu ou liste illisible).</summary>
-    private async Task<TorboxTorrent?> FindOnTorboxAsync(string? hash, CancellationToken ct)
+    private async Task UpdateAsync(long id, Action<MediaRequest> apply)
     {
-        hash = TorrentHash.Normalize(hash);
-        if (hash is null)
-        {
-            return null;
-        }
-
+        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
-            var list = await _torbox.GetMyListAsync(ct).ConfigureAwait(false);
-            return list.FirstOrDefault(t => string.Equals(t.Hash, hash, StringComparison.OrdinalIgnoreCase));
+            if (_repository.Get(id) is { } r)
+            {
+                apply(r);
+                _repository.Update(r);
+            }
         }
-        catch (TorboxException ex)
+        finally
         {
-            _logger.LogWarning(ex, "Liste des torrents Torbox illisible : vérification des doublons impossible");
-            return null;
+            _lock.Release();
         }
     }
 
-    /// <summary>Envoie le torrent à Torbox. Doit être appelé sous <see cref="_lock"/>.</summary>
+    /// <summary>
+    /// Envoie le torrent à Torbox (hors verrou), puis enregistre le résultat sur la demande et les demandes
+    /// du même torrent. Toute erreur passe la demande « En échec » (relançable) : jamais d'erreur 500 côté utilisateur.
+    /// </summary>
     private async Task SendToTorboxAsync(MediaRequest request, TorrentSource? source, CancellationToken ct)
     {
-        var targets = SameTorrent(request, RequestStatus.Pending, RequestStatus.Approved, RequestStatus.AutoApproved, RequestStatus.Failed);
+        TorboxSubmission? submission = null;
+        Exception? error = null;
         try
         {
-            // Torrent déjà présent sur le compte Torbox (ajouté à la main, hors plugin) : Torbox refuse les doublons,
-            // on rattache donc la demande au torrent existant au lieu de le renvoyer.
-            var hash = request.InfoHash;
-            var existing = await FindOnTorboxAsync(hash, ct).ConfigureAwait(false);
-            if (existing is null)
-            {
-                source ??= !string.IsNullOrEmpty(request.MagnetUrl)
-                    ? new TorrentSource(null, request.MagnetUrl)
-                    : !string.IsNullOrEmpty(request.DownloadUrl)
-                        ? await _indexers.Current.DownloadAsync(request.DownloadUrl, ct).ConfigureAwait(false)
-                        : throw new RequestException("Aucun lien de téléchargement pour ce torrent.");
-
-                if (hash is null)
-                {
-                    hash = source.File is not null ? TorrentHash.FromTorrentFile(source.File) : TorrentHash.FromMagnet(source.Magnet);
-                    existing = await FindOnTorboxAsync(hash, ct).ConfigureAwait(false);
-                }
-            }
-
-            var adopted = existing is not null;
-            if (existing is null)
-            {
-                try
-                {
-                    var created = await _torbox.CreateTorrentAsync(source!, request.TorrentTitle, ct).ConfigureAwait(false);
-                    hash = created.Hash ?? hash;
-                    existing = new TorboxTorrent(created.TorrentId ?? 0, hash, null, 0, null, false);
-                }
-                catch (TorboxException) when (hash is not null)
-                {
-                    // Refus de Torbox : si c'est un doublon, le torrent figure dans la liste du compte.
-                    existing = await FindOnTorboxAsync(hash, ct).ConfigureAwait(false);
-                    if (existing is null)
-                    {
-                        throw;
-                    }
-
-                    adopted = true;
-                }
-            }
-
-            if (adopted)
-            {
-                _logger.LogInformation("Demande {Id} : torrent déjà présent sur Torbox (id {TorrentId}), rattaché", request.Id, existing.Id);
-            }
-
-            var finished = existing.DownloadFinished || existing.Progress >= 1;
-            var message = adopted
-                ? "est validée : le torrent était déjà sur Torbox, il est suivi par le plugin."
-                : "est validée et envoyée à Torbox.";
-            foreach (var r in targets)
-            {
-                r.Status = finished ? RequestStatus.CompletedOnTorbox : RequestStatus.SentToTorbox;
-                r.TorboxTorrentId = existing.Id > 0 ? existing.Id : null;
-                r.TorboxProgress = Math.Clamp(existing.Progress, 0, 1);
-                r.InfoHash ??= existing.Hash ?? hash;
-                r.LastError = null;
-                if (r.Id != request.Id && r.ReviewedBy is null)
-                {
-                    r.ReviewedBy = request.ReviewedBy;
-                    r.ReviewedAt = request.ReviewedAt;
-                }
-
-                _repository.Update(r);
-                await _notifications.NotifyUserAsync(r.UserId, $"Votre demande « {Describe(r)} » {message}", r.Id, ct).ConfigureAwait(false);
-            }
+            submission = await _submitter.SubmitAsync(request, source, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            // Toute erreur d'envoi passe la demande « En échec » (relançable) : jamais d'erreur 500 côté utilisateur.
             _logger.LogError(ex, "Échec de l'envoi à Torbox de la demande {Id}", request.Id);
-            foreach (var r in targets)
+            error = ex;
+        }
+
+        var notices = new List<Notice>();
+        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            var current = _repository.Get(request.Id);
+            if (current is null)
             {
-                r.Status = RequestStatus.Failed;
-                r.LastError = ex.Message;
-                _repository.Update(r);
+                return;
             }
 
-            await _notifications.NotifyAdminsAsync($"Échec de l'envoi à Torbox de « {Describe(request)} » : {ex.Message}", request.Id, ct).ConfigureAwait(false);
-            await _notifications.NotifyUserAsync(request.UserId, $"L'envoi de « {Describe(request)} » a échoué, un administrateur va le relancer.", request.Id, ct).ConfigureAwait(false);
+            // Relu sous le verrou : inclut les demandes du même torrent arrivées pendant l'envoi.
+            var targets = SameTorrent(current, SendableStatuses).Where(r => SendableStatuses.Contains(r.Status)).ToList();
+            if (submission is null)
+            {
+                var message = error?.Message ?? "Envoi à Torbox impossible.";
+                foreach (var r in targets)
+                {
+                    r.Status = RequestStatus.Failed;
+                    r.LastError = message;
+                    _repository.Update(r);
+                }
+
+                notices.Add(Notice.Admins(current, $"Échec de l'envoi à Torbox de « {Describe(current)} » : {message}"));
+                notices.Add(Notice.User(current, $"L'envoi de « {Describe(current)} » a échoué, un administrateur va le relancer."));
+            }
+            else
+            {
+                var torrent = submission.Torrent;
+                var text = submission.Adopted
+                    ? "est validée : le torrent était déjà sur Torbox, il est suivi par le plugin."
+                    : "est validée et envoyée à Torbox.";
+                foreach (var r in targets)
+                {
+                    r.Status = submission.Finished ? RequestStatus.CompletedOnTorbox : RequestStatus.SentToTorbox;
+                    r.TorboxTorrentId = torrent.Id > 0 ? torrent.Id : null;
+                    r.TorboxProgress = Math.Clamp(torrent.Progress, 0, 1);
+                    r.InfoHash ??= submission.Hash;
+                    r.LastError = null;
+                    r.MissingOnTorboxSince = null;
+                    if (r.Id != current.Id && r.ReviewedBy is null)
+                    {
+                        r.ReviewedBy = current.ReviewedBy;
+                        r.ReviewedAt = current.ReviewedAt;
+                    }
+
+                    _repository.Update(r);
+                    notices.Add(Notice.User(r, $"Votre demande « {Describe(r)} » {text}"));
+                }
+            }
         }
+        finally
+        {
+            _lock.Release();
+        }
+
+        await NotifyAsync(notices).ConfigureAwait(false);
+    }
+
+    /// <summary>Envoie les notifications préparées sous le verrou (une notification ratée ne fait jamais échouer une demande).</summary>
+    private async Task NotifyAsync(IEnumerable<Notice> notices)
+    {
+        foreach (var n in notices)
+        {
+            try
+            {
+                if (n.UserId is { } userId)
+                {
+                    await _notifications.NotifyUserAsync(userId, n.Message, n.RequestId, CancellationToken.None).ConfigureAwait(false);
+                }
+                else
+                {
+                    await _notifications.NotifyAdminsAsync(n.Message, n.RequestId, CancellationToken.None).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Notification de la demande {Id} impossible", n.RequestId);
+            }
+        }
+    }
+
+    /// <summary>Notification préparée sous le verrou, envoyée après (destinataire null = administrateurs).</summary>
+    private sealed record Notice(Guid? UserId, string Message, long RequestId)
+    {
+        public static Notice User(MediaRequest r, string message) => new(r.UserId, message, r.Id);
+
+        public static Notice Admins(MediaRequest r, string message) => new(null, message, r.Id);
     }
 }

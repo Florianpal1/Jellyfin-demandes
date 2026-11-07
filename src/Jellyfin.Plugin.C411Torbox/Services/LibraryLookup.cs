@@ -20,6 +20,9 @@ public interface ILibraryLookup
     /// <summary>Nombre d'épisodes présents pour une saison (ou un épisode précis si <paramref name="episode"/> est renseigné).</summary>
     int CountEpisodes(IReadOnlyDictionary<string, string> providerIds, int season, int? episode);
 
+    /// <summary>Numéros des épisodes d'une saison présents dans la bibliothèque (fichiers multi-épisodes compris).</summary>
+    IReadOnlySet<int> GetEpisodeNumbers(IReadOnlyDictionary<string, string> providerIds, int season);
+
     /// <summary>Dossier d'une série déjà présente dans la bibliothèque (pour y ranger les nouveaux épisodes), sinon null.</summary>
     string? GetSeriesFolder(IReadOnlyDictionary<string, string> providerIds);
 
@@ -95,6 +98,37 @@ internal sealed class LibraryLookup : ILibraryLookup
         }
 
         return count;
+    }
+
+    public IReadOnlySet<int> GetEpisodeNumbers(IReadOnlyDictionary<string, string> providerIds, int season)
+    {
+        var numbers = new HashSet<int>();
+        foreach (var series in FindItems(BaseItemKind.Series, providerIds, 5))
+        {
+            var query = new InternalItemsQuery
+            {
+                IncludeItemTypes = [BaseItemKind.Episode],
+                AncestorIds = [series.Id],
+                ParentIndexNumber = season,
+                Recursive = true,
+                IsVirtualItem = false,
+            };
+            foreach (var item in _libraryManager.GetItemList(query))
+            {
+                if (item.IndexNumber is not { } first)
+                {
+                    continue;
+                }
+
+                var last = item is MediaBrowser.Controller.Entities.TV.Episode { IndexNumberEnd: { } end } && end >= first ? Math.Min(end, first + 50) : first;
+                for (int e = first; e <= last; e++)
+                {
+                    numbers.Add(e);
+                }
+            }
+        }
+
+        return numbers;
     }
 
     public string? GetSeriesFolder(IReadOnlyDictionary<string, string> providerIds)

@@ -105,4 +105,19 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Webhook Discord optionnel pour les notifications.</summary>
     public string DiscordWebhookUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Envoie aussi sur Discord les notifications destinées aux utilisateurs (validation, refus et motif, disponibilité),
+    /// préfixées du nom du demandeur. Décoché : seules les notifications des administrateurs partent sur Discord.
+    /// </summary>
+    public bool DiscordSendUserNotifications { get; set; } = true;
+
+    /// <summary>Prévient les admins d'une demande toujours en cours après ce nombre de jours. 0 = désactivé.</summary>
+    public int StaleRequestDays { get; set; } = 3;
+
+    /// <summary>Supprime les demandes terminées (disponibles, refusées, annulées) après ce nombre de jours. 0 = jamais.</summary>
+    public int RequestRetentionDays { get; set; } = 180;
+
+    /// <summary>Supprime les notifications lues après ce nombre de jours. 0 = jamais.</summary>
+    public int NotificationRetentionDays { get; set; } = 90;
 }

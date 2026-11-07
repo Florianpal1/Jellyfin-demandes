@@ -16,6 +16,14 @@ internal sealed class FakeTitles : IEpisodeTitleProvider
     public Task<IReadOnlyDictionary<(int Season, int Episode), string>> GetTitlesAsync(
         IReadOnlyDictionary<string, string> seriesProviderIds, IEnumerable<(int Season, int Episode)> episodes, CancellationToken ct)
         => Task.FromResult<IReadOnlyDictionary<(int, int), string>>(Titles);
+
+    public Task<IReadOnlyList<(int Episode, string? Title)>> GetSeasonEpisodesAsync(
+        IReadOnlyDictionary<string, string> seriesProviderIds, int season, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<(int, string?)>>(Titles
+            .Where(t => t.Key.Season == season)
+            .OrderBy(t => t.Key.Episode)
+            .Select(t => (t.Key.Episode, (string?)t.Value))
+            .ToList());
 }
 
 internal sealed class FakeRefresher : ILibraryRefresher
@@ -55,7 +63,10 @@ public sealed class ImportServiceTests : IDisposable
         _requests = new RequestService(
             _repository,
             new SearchResultCache(),
-            new IndexerProvider(new ProwlarrClient(_http, _config), new TorznabClient(_http, _config), _config),
+            new TorboxSubmitter(
+                new IndexerProvider(new ProwlarrClient(_http, _config), new TorznabClient(_http, _config), _config),
+                new TorboxClient(_http, _config),
+                NullLogger<TorboxSubmitter>.Instance),
             new TorboxClient(_http, _config),
             _library,
             _notifications,
@@ -156,6 +167,23 @@ public sealed class ImportServiceTests : IDisposable
             Status = RequestStatus.CompletedOnTorbox,
         });
 
+    /// <summary>Enchaîne les tentatives de rangement automatiques (sans attendre leur délai) jusqu'à l'échec définitif.</summary>
+    private async Task ImportUntilFinalFailureAsync(long id)
+    {
+        for (int i = 0; i < ImportService.MaxImportAttempts; i++)
+        {
+            var r = _repository.Get(id)!;
+            if (r.Status != RequestStatus.CompletedOnTorbox)
+            {
+                break;
+            }
+
+            r.RetryImportAfter = null;
+            _repository.Update(r);
+            await _import.ProcessNextAsync(CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task Movie_IsDownloaded_AndFiledLikeRadarr()
     {
@@ -195,7 +223,7 @@ public sealed class ImportServiceTests : IDisposable
         File.WriteAllBytes(video, new byte[] { 1, 2, 3 });
         var r = AddCompleted(MediaKind.Movie, RequestScope.Movie, "Dune", 2021);
 
-        await _import.ProcessNextAsync(CancellationToken.None);
+        await ImportUntilFinalFailureAsync(r.Id);
 
         Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(video));
         var saved = _repository.Get(r.Id)!;
@@ -246,16 +274,29 @@ public sealed class ImportServiceTests : IDisposable
         _files = """[ { "id": 1, "name": "Dune.mkv", "size": 100 } ]""";
         var r = AddCompleted(MediaKind.Movie, RequestScope.Movie, "Dune", 2021);
 
+        // Premier échec : nouvel essai automatique plus tard, sans déranger les admins.
         await _import.ProcessNextAsync(CancellationToken.None);
+        var waiting = _repository.Get(r.Id)!;
+        Assert.Equal(RequestStatus.CompletedOnTorbox, waiting.Status);
+        Assert.Equal(1, waiting.ImportAttempts);
+        Assert.NotNull(waiting.RetryImportAfter);
+        Assert.Contains("introuvable", waiting.LastError, StringComparison.Ordinal);
+        Assert.DoesNotContain(_notifications.Sent, n => n.Message.Contains("Échec du rangement", StringComparison.Ordinal));
 
+        // Le délai n'est pas écoulé : rien à faire.
+        Assert.False(await _import.ProcessNextAsync(CancellationToken.None));
+
+        await ImportUntilFinalFailureAsync(r.Id);
         var failed = _repository.Get(r.Id)!;
         Assert.Equal(RequestStatus.ImportFailed, failed.Status);
+        Assert.Equal(ImportService.MaxImportAttempts, failed.ImportAttempts);
         Assert.Contains("introuvable", failed.LastError, StringComparison.Ordinal);
         Assert.Contains(_notifications.Sent, n => n.UserId is null && n.Message.Contains("Échec du rangement", StringComparison.Ordinal));
 
         _config.Current.MoviesPath = Path.Combine(_dir, "Films");
         var retried = await _requests.RetryImportAsync(r.Id, CancellationToken.None);
         Assert.Equal(RequestStatus.CompletedOnTorbox, retried.Status);
+        Assert.Equal(0, retried.ImportAttempts);
 
         await _import.ProcessNextAsync(CancellationToken.None);
         Assert.Equal(RequestStatus.Imported, _repository.Get(r.Id)!.Status);
@@ -315,15 +356,48 @@ public sealed class ImportServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task InterruptedImport_IsResetOnStartup()
+    public async Task TransientFailure_IsRetriedAutomatically_ThenSucceeds()
+    {
+        _config.Current.MoviesPath = Path.Combine(_dir, "nexistepas");
+        _files = """[ { "id": 1, "name": "Dune.mkv", "size": 100 } ]""";
+        var r = AddCompleted(MediaKind.Movie, RequestScope.Movie, "Dune", 2021);
+        await _import.ProcessNextAsync(CancellationToken.None);
+        Assert.Equal(1, _repository.Get(r.Id)!.ImportAttempts);
+
+        // Le partage NAS est revenu avant le nouvel essai.
+        _config.Current.MoviesPath = Path.Combine(_dir, "Films");
+        await ImportUntilFinalFailureAsync(r.Id);
+
+        var saved = _repository.Get(r.Id)!;
+        Assert.Equal(RequestStatus.Imported, saved.Status);
+        Assert.Equal(0, saved.ImportAttempts);
+        Assert.Null(saved.LastError);
+    }
+
+    [Fact]
+    public void RetryDelay_GrowsWithAttempts()
+    {
+        Assert.Equal(TimeSpan.FromMinutes(5), ImportService.RetryDelay(1));
+        Assert.Equal(TimeSpan.FromMinutes(30), ImportService.RetryDelay(2));
+    }
+
+    [Fact]
+    public async Task InterruptedWork_IsRecoveredOnStartup()
     {
         var r = AddCompleted(MediaKind.Movie, RequestScope.Movie, "Dune", 2021);
         r.Status = RequestStatus.Importing;
         _repository.Update(r);
+        var sending = AddCompleted(MediaKind.Movie, RequestScope.Movie, "Dune", 2021);
+        sending.Status = RequestStatus.Approved;
+        _repository.Update(sending);
 
-        await _requests.ResetInterruptedImportsAsync(CancellationToken.None);
+        await _requests.RecoverInterruptedAsync(CancellationToken.None);
 
         Assert.Equal(RequestStatus.CompletedOnTorbox, _repository.Get(r.Id)!.Status);
+        var failed = _repository.Get(sending.Id)!;
+        Assert.Equal(RequestStatus.Failed, failed.Status);
+        Assert.Contains("interrompu", failed.LastError, StringComparison.Ordinal);
+        Assert.Contains(_notifications.Sent, n => n.UserId is null && n.Message.Contains("interrompu", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -335,7 +409,7 @@ public sealed class ImportServiceTests : IDisposable
         {
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN ImportProgress; ALTER TABLE Requests DROP COLUMN ImportedPath; ALTER TABLE Requests DROP COLUMN BookIds; PRAGMA user_version = 1;";
+            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN MissingOnTorboxSince; ALTER TABLE Requests DROP COLUMN ImportAttempts; ALTER TABLE Requests DROP COLUMN RetryImportAfter; ALTER TABLE Requests DROP COLUMN StaleNotifiedAt; ALTER TABLE Requests DROP COLUMN ImportProgress; ALTER TABLE Requests DROP COLUMN ImportedPath; ALTER TABLE Requests DROP COLUMN BookIds; PRAGMA user_version = 1;";
             cmd.ExecuteNonQuery();
         }
 
@@ -359,7 +433,7 @@ public sealed class ImportServiceTests : IDisposable
         {
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN BookIds; PRAGMA user_version = 2;";
+            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN MissingOnTorboxSince; ALTER TABLE Requests DROP COLUMN ImportAttempts; ALTER TABLE Requests DROP COLUMN RetryImportAfter; ALTER TABLE Requests DROP COLUMN StaleNotifiedAt; ALTER TABLE Requests DROP COLUMN BookIds; PRAGMA user_version = 2;";
             cmd.ExecuteNonQuery();
         }
 
@@ -367,5 +441,34 @@ public sealed class ImportServiceTests : IDisposable
         var r = repo.Insert(new MediaRequest { UserId = Guid.NewGuid(), MediaKind = MediaKind.Book, Scope = RequestScope.Book, MediaTitle = "Astérix", BookIds = "Isbn=978", Status = RequestStatus.Pending });
 
         Assert.Equal("Isbn=978", repo.Get(r.Id)!.BookIds);
+    }
+
+    [Fact]
+    public void Repository_MigratesV3Database()
+    {
+        var path = Path.Combine(_dir, "v3.db");
+        _ = new RequestRepository(path);
+        using (var conn = new SqliteConnection("Data Source=" + path + ";Pooling=False"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN MissingOnTorboxSince; ALTER TABLE Requests DROP COLUMN ImportAttempts; ALTER TABLE Requests DROP COLUMN RetryImportAfter; ALTER TABLE Requests DROP COLUMN StaleNotifiedAt; PRAGMA user_version = 3;";
+            cmd.ExecuteNonQuery();
+        }
+
+        var repo = new RequestRepository(path);
+        var r = repo.Insert(new MediaRequest { UserId = Guid.NewGuid(), MediaTitle = "Dune", Status = RequestStatus.CompletedOnTorbox });
+        var retryAt = new DateTime(2026, 11, 7, 12, 0, 0, DateTimeKind.Utc);
+        r.ImportAttempts = 2;
+        r.RetryImportAfter = retryAt;
+        r.MissingOnTorboxSince = retryAt;
+        r.StaleNotifiedAt = retryAt;
+        repo.Update(r);
+
+        var saved = repo.Get(r.Id)!;
+        Assert.Equal(2, saved.ImportAttempts);
+        Assert.Equal(retryAt, saved.RetryImportAfter);
+        Assert.Equal(retryAt, saved.MissingOnTorboxSince);
+        Assert.Equal(retryAt, saved.StaleNotifiedAt);
     }
 }

@@ -85,6 +85,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<ITitleAliasProvider>(sp => sp.GetRequiredService<MetadataSearchService>());
         serviceCollection.AddSingleton<TorrentSearchService>();
         serviceCollection.AddSingleton<INotificationService, NotificationService>();
+        serviceCollection.AddSingleton<TorboxSubmitter>();
         serviceCollection.AddSingleton<RequestService>();
         serviceCollection.AddHostedService<LibraryWatcher>();
 
@@ -95,6 +96,6 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<ImportService>();
         serviceCollection.AddHostedService<ImportWorker>();
 
-        // TorboxStatusTask (IScheduledTask) est découverte automatiquement par Jellyfin.
+        // TorboxStatusTask et MaintenanceTask (IScheduledTask) sont découvertes automatiquement par Jellyfin.
     }
 }

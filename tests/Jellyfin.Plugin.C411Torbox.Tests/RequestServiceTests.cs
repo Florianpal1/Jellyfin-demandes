@@ -25,7 +25,12 @@ public sealed class RequestServiceTests : IDisposable
     private readonly FakeHttp _http;
     private readonly RequestService _service;
 
+    private readonly ManualTime _time = new() { Now = DateTimeOffset.UtcNow };
+
     private bool _torboxFails;
+
+    /// <summary>Si renseigné, createtorrent signale son arrivée puis attend ce signal (Torbox lent).</summary>
+    private (ManualResetEventSlim Entered, ManualResetEventSlim Release)? _slowCreate;
     private string _myList = """{ "success": true, "data": [] }""";
 
     /// <summary>Contenu de /mylist une fois createtorrent appelé (simule un doublon détecté par Torbox).</summary>
@@ -39,6 +44,12 @@ public sealed class RequestServiceTests : IDisposable
             var path = req.RequestUri!.AbsolutePath;
             if (path.EndsWith("/createtorrent", StringComparison.Ordinal))
             {
+                if (_slowCreate is { } slow)
+                {
+                    slow.Entered.Set();
+                    slow.Release.Wait(TimeSpan.FromSeconds(10));
+                }
+
                 _myList = _myListAfterCreate ?? _myList;
                 return _torboxFails
                     ? FakeHttp.Json("""{ "success": false, "detail": "Limite atteinte" }""", HttpStatusCode.Forbidden)
@@ -50,17 +61,26 @@ public sealed class RequestServiceTests : IDisposable
                 return FakeHttp.Json(_myList);
             }
 
+            if (path.EndsWith("/controltorrent", StringComparison.Ordinal))
+            {
+                return FakeHttp.Json("""{ "success": true }""");
+            }
+
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
         _service = new RequestService(
             _repository,
             _cache,
-            new IndexerProvider(new ProwlarrClient(_http, _config), new TorznabClient(_http, _config), _config),
+            new TorboxSubmitter(
+                new IndexerProvider(new ProwlarrClient(_http, _config), new TorznabClient(_http, _config), _config),
+                new TorboxClient(_http, _config),
+                NullLogger<TorboxSubmitter>.Instance),
             new TorboxClient(_http, _config),
             _library,
             _notifications,
             _config,
-            NullLogger<RequestService>.Instance);
+            NullLogger<RequestService>.Instance,
+            _time);
     }
 
     public void Dispose()
@@ -77,6 +97,8 @@ public sealed class RequestServiceTests : IDisposable
             }
         }
     }
+
+    private int ControlTorrentCalls => _http.Calls.Count(c => c.Request.RequestUri!.AbsolutePath.EndsWith("/controltorrent", StringComparison.Ordinal));
 
     private int CreateTorrentCalls => _http.Calls.Count(c => c.Request.RequestUri!.AbsolutePath.EndsWith("/createtorrent", StringComparison.Ordinal));
 
@@ -361,5 +383,204 @@ public sealed class RequestServiceTests : IDisposable
         var all = _repository.GetNotifications(Alice, isAdmin: true);
         Assert.NotNull(all.Single(n => n.UserId == Alice).ReadAt);
         Assert.Null(all.Single(n => n.UserId is null).ReadAt);
+    }
+
+    [Fact]
+    public async Task SlowTorbox_DoesNotBlockOtherRequests()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        _slowCreate = (entered, release);
+
+        var sending = Task.Run(() => _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+
+        // Pendant l'envoi : une autre demande et une validation passent sans attendre Torbox.
+        var other = await _service.CreateAsync(Bob, "bob", AddResult(40 * Gb, 50, hash: "d".PadRight(40, 'd')), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(RequestStatus.Pending, other.Status);
+        await _service.RejectAsync(other.Id, "admin", null, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Même torrent demandé pendant l'envoi : il suit la demande et passe « envoyé » avec elle.
+        var follower = await _service.CreateAsync(Bob, "bob", AddResult(1 * Gb, 50), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(RequestStatus.AutoApproved, follower.Status);
+
+        release.Set();
+        var r = await sending.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(RequestStatus.SentToTorbox, r.Status);
+        Assert.Equal(RequestStatus.SentToTorbox, _repository.Get(follower.Id)!.Status);
+        Assert.Equal(1, CreateTorrentCalls);
+    }
+
+    [Fact]
+    public async Task ApproveTwice_SecondAdminGetsConflict()
+    {
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(40 * Gb, 50), CancellationToken.None);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        _slowCreate = (entered, release);
+
+        var first = Task.Run(() => _service.ApproveAsync(r.Id, "admin1", CancellationToken.None));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+        var ex = await Assert.ThrowsAsync<RequestException>(() => _service.ApproveAsync(r.Id, "admin2", CancellationToken.None));
+        Assert.Equal(409, ex.StatusCode);
+
+        release.Set();
+        Assert.Equal(RequestStatus.SentToTorbox, (await first.WaitAsync(TimeSpan.FromSeconds(10))).Status);
+        Assert.Equal(1, CreateTorrentCalls);
+    }
+
+    [Fact]
+    public async Task TorrentMissingFromTorbox_FailsAfterGracePeriod()
+    {
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None);
+        _myList = """{ "success": true, "data": [] }""";
+
+        await _service.RefreshTorboxStatusAsync(CancellationToken.None);
+        var missing = _repository.Get(r.Id)!;
+        Assert.Equal(RequestStatus.SentToTorbox, missing.Status);
+        Assert.NotNull(missing.MissingOnTorboxSince);
+
+        _time.Now += RequestService.MissingOnTorboxGracePeriod;
+        await _service.RefreshTorboxStatusAsync(CancellationToken.None);
+        var failed = _repository.Get(r.Id)!;
+        Assert.Equal(RequestStatus.Failed, failed.Status);
+        Assert.Contains("n'est plus sur le compte Torbox", failed.LastError, StringComparison.Ordinal);
+        Assert.Contains(_notifications.Sent, n => n.UserId is null && n.Message.Contains("n'est plus sur le compte Torbox", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task TorrentBackOnTorbox_ClearsMissingFlag()
+    {
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None);
+        _myList = """{ "success": true, "data": [] }""";
+        await _service.RefreshTorboxStatusAsync(CancellationToken.None);
+
+        _myList = $$"""{ "success": true, "data": [ { "id": 99, "hash": "{{Hash}}", "progress": 0.5, "download_state": "downloading" } ] }""";
+        await _service.RefreshTorboxStatusAsync(CancellationToken.None);
+        _time.Now += RequestService.MissingOnTorboxGracePeriod * 2;
+        await _service.RefreshTorboxStatusAsync(CancellationToken.None);
+
+        var saved = _repository.Get(r.Id)!;
+        Assert.Equal(RequestStatus.DownloadingOnTorbox, saved.Status);
+        Assert.Null(saved.MissingOnTorboxSince);
+    }
+
+    [Fact]
+    public async Task TorboxErrorState_FailsRequest_AndResendReplacesTheTorrent()
+    {
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None);
+        _myList = $$"""{ "success": true, "data": [ { "id": 99, "hash": "{{Hash}}", "progress": 0.1, "download_state": "error" } ] }""";
+
+        await _service.RefreshTorboxStatusAsync(CancellationToken.None);
+        var failed = _repository.Get(r.Id)!;
+        Assert.Equal(RequestStatus.Failed, failed.Status);
+        Assert.Contains("erreur", failed.LastError, StringComparison.Ordinal);
+
+        // Renvoyer : le torrent en erreur est supprimé de Torbox puis ajouté à nouveau.
+        var resent = await _service.ApproveAsync(r.Id, "admin", CancellationToken.None);
+        Assert.Equal(RequestStatus.SentToTorbox, resent.Status);
+        Assert.Equal(1, ControlTorrentCalls);
+        Assert.Equal(2, CreateTorrentCalls);
+    }
+
+    [Fact]
+    public async Task StalledTorrent_StaysInProgress_WithItsState()
+    {
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None);
+        _myList = $$"""{ "success": true, "data": [ { "id": 99, "hash": "{{Hash}}", "progress": 0.2, "download_state": "stalled (no seeds)" } ] }""";
+
+        await _service.RefreshTorboxStatusAsync(CancellationToken.None);
+
+        var saved = _repository.Get(r.Id)!;
+        Assert.Equal(RequestStatus.DownloadingOnTorbox, saved.Status);
+        Assert.Equal("Torbox : stalled (no seeds)", saved.LastError);
+    }
+
+    [Fact]
+    public async Task User_CancelsOwnPendingRequest_ButNotSomeoneElses_NorASentOne()
+    {
+        var pending = await _service.CreateAsync(Alice, "alice", AddResult(40 * Gb, 50), CancellationToken.None);
+
+        var notFound = await Assert.ThrowsAsync<RequestException>(() => _service.CancelAsync(pending.Id, Bob, "bob", false, CancellationToken.None));
+        Assert.Equal(404, notFound.StatusCode);
+
+        var cancelled = await _service.CancelAsync(pending.Id, Alice, "alice", false, CancellationToken.None);
+        Assert.Equal(RequestStatus.Cancelled, cancelled.Status);
+        Assert.DoesNotContain(_repository.GetActive(), x => x.Id == pending.Id);
+
+        var sent = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50, hash: "e".PadRight(40, 'e')), CancellationToken.None);
+        var conflict = await Assert.ThrowsAsync<RequestException>(() => _service.CancelAsync(sent.Id, Alice, "alice", false, CancellationToken.None));
+        Assert.Equal(409, conflict.StatusCode);
+    }
+
+    [Fact]
+    public async Task Admin_CancelsSentRequest_AndDeletesTorrentOnlyWhenUnused()
+    {
+        var a = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None);
+        var b = await _service.CreateAsync(Bob, "bob", AddResult(1 * Gb, 50), CancellationToken.None);
+
+        // Bob suit toujours ce torrent : il n'est pas supprimé de Torbox.
+        await _service.CancelAsync(a.Id, null, "admin", deleteFromTorbox: true, CancellationToken.None);
+        Assert.Equal(0, ControlTorrentCalls);
+        Assert.Contains(_notifications.Sent, n => n.UserId == Alice && n.Message.Contains("annulée par un administrateur", StringComparison.Ordinal));
+
+        var cancelled = await _service.CancelAsync(b.Id, null, "admin", deleteFromTorbox: true, CancellationToken.None);
+        Assert.Equal(RequestStatus.Cancelled, cancelled.Status);
+        Assert.Equal("admin", cancelled.ReviewedBy);
+        Assert.Equal(1, ControlTorrentCalls);
+    }
+
+    [Fact]
+    public async Task Admin_MarksAvailable_WhenJellyfinDoesNotRecognizeTheMedia()
+    {
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None);
+
+        var available = await _service.MarkAvailableAsync(r.Id, "admin", CancellationToken.None);
+
+        Assert.Equal(RequestStatus.Available, available.Status);
+        Assert.Contains(_notifications.Sent, n => n.UserId == Alice && n.Message.Contains("disponible", StringComparison.Ordinal));
+        var ex = await Assert.ThrowsAsync<RequestException>(() => _service.MarkAvailableAsync(r.Id, "admin", CancellationToken.None));
+        Assert.Equal(409, ex.StatusCode);
+    }
+
+    [Fact]
+    public async Task StaleRequest_IsReportedOnce()
+    {
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None);
+        Assert.Empty(await _service.CheckStaleAsync(CancellationToken.None));
+
+        _time.Now = DateTimeOffset.UtcNow.AddDays(_config.Current.StaleRequestDays + 1);
+        var stale = await _service.CheckStaleAsync(CancellationToken.None);
+        Assert.Equal(r.Id, Assert.Single(stale).Id);
+        Assert.Contains(_notifications.Sent, n => n.UserId is null && n.Message.Contains("toujours « envoyée à Torbox »", StringComparison.Ordinal));
+
+        Assert.Empty(await _service.CheckStaleAsync(CancellationToken.None));
+
+        _config.Current.StaleRequestDays = 0;
+        Assert.Empty(await _service.CheckStaleAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Purge_RemovesOldFinishedRequestsAndReadNotifications_Only()
+    {
+        var available = await _service.CreateAsync(Alice, "alice", AddResult(1 * Gb, 50), CancellationToken.None);
+        await _service.MarkAvailableAsync(available.Id, "admin", CancellationToken.None);
+        var pending = await _service.CreateAsync(Bob, "bob", AddResult(40 * Gb, 50, hash: "f".PadRight(40, 'f')), CancellationToken.None);
+        _repository.AddNotification(new Notification { UserId = Alice, Message = "lue" });
+        _repository.MarkNotificationsRead(Alice, isAdmin: false);
+        _repository.AddNotification(new Notification { UserId = Alice, Message = "non lue" });
+
+        Assert.Equal((0, 0), _service.Purge());
+
+        _time.Now = DateTimeOffset.UtcNow.AddDays(_config.Current.RequestRetentionDays + 1);
+        var (requests, notifications) = _service.Purge();
+
+        Assert.Equal(1, requests);
+        Assert.True(notifications >= 1);
+        Assert.Null(_repository.Get(available.Id));
+        Assert.NotNull(_repository.Get(pending.Id));
+        Assert.Contains(_repository.GetNotifications(Alice, isAdmin: false), n => n.Message == "non lue");
+        Assert.DoesNotContain(_repository.GetNotifications(Alice, isAdmin: false), n => n.Message == "lue");
     }
 }

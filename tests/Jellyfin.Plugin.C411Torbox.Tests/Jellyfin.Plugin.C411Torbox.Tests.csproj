@@ -11,6 +11,8 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
+    <!-- Moteur JavaScript : tests de l'interface web (app.js, pages de configuration) sans navigateur ni Node. -->
+    <PackageReference Include="Jint" Version="4.17.0" />
     <!-- Le plugin exclut ces assemblies à l'exécution (fournies par Jellyfin) : les tests en ont besoin. -->
     <PackageReference Include="Jellyfin.Controller" Version="12.2.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />

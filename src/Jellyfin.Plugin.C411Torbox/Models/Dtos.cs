@@ -156,6 +156,23 @@ public class RejectBody
     public string? Reason { get; set; }
 }
 
+public class CancelBody
+{
+    /// <summary>Supprime aussi le torrent de Torbox (si aucune autre demande en cours ne l'utilise).</summary>
+    public bool DeleteFromTorbox { get; set; }
+}
+
+/// <summary>Un épisode d'une saison, pour le choix de l'épisode à demander.</summary>
+public class EpisodeListItem
+{
+    public int Episode { get; set; }
+
+    /// <summary>Titre (null s'il n'est pas encore connu des fournisseurs de métadonnées).</summary>
+    public string? Title { get; set; }
+
+    public bool InLibrary { get; set; }
+}
+
 public class Notification
 {
     public long Id { get; set; }

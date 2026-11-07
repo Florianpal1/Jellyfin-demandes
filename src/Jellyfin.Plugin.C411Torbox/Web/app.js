@@ -23,8 +23,12 @@
         Imported: 'Rangé, arrive dans Jellyfin',
         ImportFailed: 'Échec du rangement',
         Available: 'Disponible',
-        Failed: 'Échec'
+        Failed: 'Échec',
+        Cancelled: 'Annulée'
     };
+
+    /** Statuts où le média peut encore arriver dans Jellyfin : l'admin peut le marquer disponible à la main. */
+    const SENT_STATUSES = ['SentToTorbox', 'DownloadingOnTorbox', 'CompletedOnTorbox', 'Imported', 'ImportFailed'];
 
     const state = { auth: null, me: null, media: null, tab: 'search' };
 
@@ -76,6 +80,46 @@
         return `${r.mediaTitle} – saison ${r.season}`;
     }
 
+    /** L'utilisateur peut annuler sa demande tant qu'elle n'est pas partie sur Torbox. */
+    function canUserCancel(r) {
+        return r.status === 'Pending' || r.status === 'Failed';
+    }
+
+    /** L'admin peut annuler toute demande en cours, sauf pendant un envoi à Torbox ou un téléchargement vers le NAS. */
+    function canAdminCancel(r) {
+        return canUserCancel(r) || SENT_STATUSES.includes(r.status);
+    }
+
+    function canMarkAvailable(r) {
+        return SENT_STATUSES.includes(r.status);
+    }
+
+    /** Libellé d'un épisode dans la liste de choix. */
+    function episodeLabel(e) {
+        const num = 'E' + String(e.episode).padStart(2, '0');
+        return num + (e.title ? ' · ' + e.title : '') + (e.inLibrary ? ' (déjà dans Jellyfin)' : '');
+    }
+
+    /** Heure du prochain essai de rangement automatique, ou null. */
+    function retryText(r, now) {
+        if (r.status !== 'CompletedOnTorbox' || !r.retryImportAfter) return null;
+        const at = new Date(r.retryImportAfter);
+        if (at.getTime() <= (now || Date.now())) return 'Nouvel essai de rangement imminent';
+        return 'Nouvel essai de rangement à ' + at.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    /** Nombre de jours depuis la création, pour une demande signalée comme bloquée (sinon null). */
+    function staleDays(r, now) {
+        if (!r.staleNotifiedAt || !canMarkAvailable(r)) return null;
+        return Math.floor(((now || Date.now()) - new Date(r.createdAt).getTime()) / 86400000);
+    }
+
+    // Tests (moteur JavaScript sans navigateur) : seules les fonctions pures sont exposées.
+    if (typeof document === 'undefined') {
+        globalThis.C411Ui = { STATUS_LABELS, formatSize, describe, seedClass, safeImage, canUserCancel, canAdminCancel, canMarkAvailable, episodeLabel, retryText, staleDays };
+        return;
+    }
+
     let toastTimer;
     function toast(message, isError) {
         const t = $('#toast');
@@ -96,7 +140,9 @@
                 el('div', { style: `width:${Math.round(progress * 100)}%` })));
         }
         if (r.status === 'Rejected' && r.rejectReason) wrap.append(el('div', { class: 'muted' }, 'Motif : ' + r.rejectReason));
-        if ((r.status === 'Failed' || r.status === 'ImportFailed') && r.lastError) wrap.append(el('div', { class: 'muted' }, r.lastError));
+        if (r.lastError && r.status !== 'Rejected') wrap.append(el('div', { class: 'muted' }, r.lastError));
+        const retry = retryText(r);
+        if (retry) wrap.append(el('div', { class: 'muted' }, retry));
         if (r.autoApprovalReason === 'Cached') wrap.append(el('div', { class: 'muted' }, 'auto : déjà en cache Torbox'));
         if (r.autoApprovalReason === 'Size') wrap.append(el('div', { class: 'muted' }, 'auto : sous le seuil'));
         return wrap;
@@ -232,6 +278,51 @@
         }
     }
 
+    // ---------- choix de l'épisode ----------
+
+    let episodeRequest = 0;
+
+    /** Liste les épisodes de la saison (titres, déjà présents) ; à défaut, saisie libre du numéro. */
+    async function loadEpisodes() {
+        const m = state.media;
+        const select = $('#episodeSelect');
+        const input = $('#episodeInput');
+        if (!m || m.kind !== 'Series' || !$('#episodeToggle').checked) return;
+        const season = parseInt($('#seasonInput').value, 10);
+        if (isNaN(season)) return;
+        const ticket = ++episodeRequest;
+        select.hidden = true;
+        input.hidden = false;
+        $('#episodeHint').textContent = 'Chargement des épisodes…';
+        try {
+            const list = await api('GET', `C411Torbox/Media/Episodes?mediaId=${encodeURIComponent(m.id)}&season=${season}`);
+            if (ticket !== episodeRequest) return;
+            select.replaceChildren();
+            if (!list.length) {
+                $('#episodeHint').textContent = 'Épisodes inconnus : saisissez le numéro.';
+                return;
+            }
+            const first = list.find((e) => !e.inLibrary);
+            for (const e of list) {
+                select.append(el('option', { value: e.episode, disabled: e.inLibrary, selected: first === e }, episodeLabel(e)));
+            }
+            select.append(el('option', { value: 'other' }, 'Autre numéro…'));
+            select.hidden = false;
+            // Tous déjà présents : « Autre numéro… » est le seul choix, la saisie reste visible.
+            input.hidden = !!first;
+            $('#episodeHint').textContent = first ? '' : 'Tous les épisodes connus sont déjà dans Jellyfin.';
+        } catch (e) {
+            if (ticket === episodeRequest) $('#episodeHint').textContent = 'Liste des épisodes indisponible : saisissez le numéro.';
+        }
+    }
+
+    /** Numéro d'épisode choisi (liste, ou saisie libre). */
+    function chosenEpisode() {
+        const select = $('#episodeSelect');
+        if (!select.hidden && select.value !== 'other') return parseInt(select.value, 10);
+        return parseInt($('#episodeInput').value, 10);
+    }
+
     function openMedia(m) {
         state.media = m;
         const img = safeImage(m.imageUrl);
@@ -240,6 +331,11 @@
         $('#detailTitle').textContent = m.name + (m.year ? ` (${m.year})` : '');
         $('#detailOverview').textContent = m.overview || '';
         $('#seriesFields').hidden = m.kind !== 'Series';
+        $('#episodeSelect').replaceChildren();
+        $('#episodeSelect').hidden = true;
+        $('#episodeInput').hidden = false;
+        $('#episodeHint').textContent = '';
+        if (m.kind === 'Series') loadEpisodes();
         $('#torrentInfo').replaceChildren();
         $('#torrentTable').hidden = true;
         $('#mediaDetail').hidden = false;
@@ -254,7 +350,7 @@
         const body = { MediaId: m.id };
         if (m.kind === 'Series') {
             body.Season = parseInt($('#seasonInput').value, 10);
-            if ($('#episodeToggle').checked) body.Episode = parseInt($('#episodeInput').value, 10);
+            if ($('#episodeToggle').checked) body.Episode = chosenEpisode();
         }
         const info = $('#torrentInfo');
         const tbody = $('#torrentTable tbody');
@@ -322,26 +418,41 @@
         const tbody = $('#mineTable tbody');
         const btn = $('#mineRefresh');
         btn.disabled = true;
-        tbody.replaceChildren(el('tr', null, el('td', { colspan: 5, class: 'spinner' }, refresh ? 'Actualisation…' : 'Chargement…')));
+        tbody.replaceChildren(el('tr', null, el('td', { colspan: 6, class: 'spinner' }, refresh ? 'Actualisation…' : 'Chargement…')));
         try {
             const list = refresh
                 ? await api('POST', 'C411Torbox/Requests/Mine/Refresh')
                 : await api('GET', 'C411Torbox/Requests/Mine');
             tbody.replaceChildren();
-            if (!list.length) tbody.append(el('tr', null, el('td', { colspan: 5, class: 'muted' }, 'Aucune demande pour l\'instant.')));
+            if (!list.length) tbody.append(el('tr', null, el('td', { colspan: 6, class: 'muted' }, 'Aucune demande pour l\'instant.')));
             for (const r of list) {
                 tbody.append(el('tr', null,
                     el('td', null, describe(r)),
                     el('td', { class: 'title muted' }, r.torrentTitle),
                     el('td', { class: 'num' }, formatSize(r.sizeBytes)),
                     el('td', null, statusPill(r)),
-                    el('td', null, formatDate(r.createdAt))));
+                    el('td', null, formatDate(r.createdAt)),
+                    el('td', null, canUserCancel(r)
+                        ? el('button', { class: 'ghost', type: 'button', onclick: (e) => cancelMine(r, e.target) }, 'Annuler')
+                        : null)));
             }
         } catch (e) {
-            tbody.replaceChildren(el('tr', null, el('td', { colspan: 5, class: 'error' }, e.message)));
+            tbody.replaceChildren(el('tr', null, el('td', { colspan: 6, class: 'error' }, e.message)));
         } finally {
             btn.disabled = false;
         }
+    }
+
+    async function cancelMine(r, btn) {
+        if (!window.confirm(`Annuler votre demande « ${describe(r)} » ?`)) return;
+        btn.disabled = true;
+        try {
+            await api('POST', `C411Torbox/Requests/${r.id}/Cancel`);
+            toast('Demande annulée.');
+        } catch (e) {
+            toast(e.message, true);
+        }
+        loadMine();
     }
 
     // ---------- notifications ----------
@@ -377,7 +488,8 @@
         const filter = $('#adminFilter').value;
         tbody.replaceChildren(el('tr', null, el('td', { colspan: 9, class: 'spinner' }, 'Chargement…')));
         try {
-            const list = await api('GET', 'C411Torbox/Admin/Requests' + (filter ? '?status=' + filter : ''));
+            const query = filter === 'active' ? '?active=true' : filter ? '?status=' + filter : '';
+            const list = await api('GET', 'C411Torbox/Admin/Requests' + query);
             tbody.replaceChildren();
             if (!list.length) tbody.append(el('tr', null, el('td', { colspan: 9, class: 'muted' }, 'Aucune demande.')));
             for (const r of list) {
@@ -391,6 +503,13 @@
                     actions.append(
                         el('button', { class: 'ok', type: 'button', title: 'Retélécharger depuis Torbox et ranger', onclick: (e) => adminAction(r, 'RetryImport', e.target) }, 'Relancer'));
                 }
+                if (canMarkAvailable(r)) {
+                    actions.append(' ', el('button', { class: 'ghost', type: 'button', title: 'Le média est dans Jellyfin mais n\'a pas été reconnu', onclick: (e) => adminAction(r, 'MarkAvailable', e.target) }, 'Disponible'));
+                }
+                if (canAdminCancel(r) && r.status !== 'Pending' && r.status !== 'Failed') {
+                    actions.append(' ', el('button', { class: 'bad', type: 'button', onclick: (e) => adminAction(r, 'Cancel', e.target) }, 'Annuler'));
+                }
+                const days = staleDays(r);
                 tbody.append(el('tr', { class: r.wasCachedOnTorbox ? 'cached' : null },
                     el('td', null, describe(r)),
                     el('td', null, r.userName),
@@ -398,7 +517,8 @@
                     el('td', { class: 'num' }, formatSize(r.sizeBytes)),
                     el('td', { class: 'num ' + seedClass(r.seeders) }, r.seeders),
                     el('td', null, r.wasCachedOnTorbox ? el('span', { class: 'pill flash' }, '⚡') : ''),
-                    el('td', null, statusPill(r), r.reviewedBy ? el('div', { class: 'muted' }, 'par ' + r.reviewedBy) : null),
+                    el('td', null, statusPill(r), r.reviewedBy ? el('div', { class: 'muted' }, 'par ' + r.reviewedBy) : null,
+                        days !== null ? el('div', { class: 'stale' }, `⚠ en cours depuis ${days} jours`) : null),
                     el('td', null, formatDate(r.createdAt)),
                     actions));
             }
@@ -414,12 +534,19 @@
             const reason = window.prompt(`Refuser « ${describe(r)} » ?\nMotif (facultatif) :`, '');
             if (reason === null) return;
             body = { Reason: reason };
+        } else if (action === 'Cancel') {
+            if (!window.confirm(`Annuler la demande « ${describe(r)} » de ${r.userName} ?`)) return;
+            body = { DeleteFromTorbox: !!r.torboxTorrentId && window.confirm('Supprimer aussi le torrent de Torbox ?\n(seulement si aucune autre demande ne l\'utilise)') };
+        } else if (action === 'MarkAvailable') {
+            if (!window.confirm(`Marquer « ${describe(r)} » comme disponible dans Jellyfin ?`)) return;
         }
         btn.disabled = true;
         try {
             const updated = await api('POST', `C411Torbox/Admin/Requests/${r.id}/${action}`, body);
             toast(action === 'Reject'
                 ? 'Demande refusée.'
+                : action === 'Cancel' ? 'Demande annulée.' + (updated.lastError ? ' ' + updated.lastError : '')
+                : action === 'MarkAvailable' ? 'Demande marquée disponible.'
                 : action === 'RetryImport' ? 'Rangement relancé : le téléchargement vers le NAS va reprendre.'
                 : updated.status === 'Failed' ? 'Échec de l\'envoi à Torbox : ' + (updated.lastError || '') : 'Demande validée et envoyée à Torbox.',
                 updated.status === 'Failed');
@@ -467,7 +594,14 @@
         $('#mediaForm').addEventListener('submit', searchMedia);
         $('#torrentForm').addEventListener('submit', searchTorrents);
         $('#detailClose').addEventListener('click', () => { $('#mediaDetail').hidden = true; });
-        $('#episodeToggle').addEventListener('change', (e) => { $('#episodeLabel').hidden = !e.target.checked; });
+        $('#episodeToggle').addEventListener('change', (e) => {
+            $('#episodeLabel').hidden = !e.target.checked;
+            loadEpisodes();
+        });
+        $('#seasonInput').addEventListener('change', loadEpisodes);
+        $('#episodeSelect').addEventListener('change', (e) => {
+            $('#episodeInput').hidden = e.target.value !== 'other';
+        });
         $('#mediaKind').addEventListener('change', (e) => {
             $('#mediaQuery').placeholder = e.target.value === 'Book'
                 ? 'Titre du livre, de la BD ou du journal…'
