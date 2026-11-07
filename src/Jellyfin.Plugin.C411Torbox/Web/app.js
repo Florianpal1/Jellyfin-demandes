@@ -3,7 +3,7 @@
     'use strict';
 
     const CLIENT = 'C411 Torbox';
-    const VERSION = '0.7.0';
+    const VERSION = '0.8.0';
     const OWN_AUTH_KEY = 'c411torbox_auth';
     const DEVICE_KEY = 'c411torbox_device';
 
