@@ -338,3 +338,4 @@ Décisions :
 | 0.6.x | Torrents hors sujet écartés, bouton « Actualiser », tests en CI, rattachement d'un torrent déjà sur Torbox |
 | 0.7.0 | Plus de doublons dans la recherche, filtre par année, recherche par identifiant (TMDB / IMDb) |
 | 0.8.0 | Fiabilité, suivi, annulation, liste des épisodes, ménage, dépôt de plugins (§ 9) |
+| 0.9.0 | Changement du torrent d'une demande en attente de validation |

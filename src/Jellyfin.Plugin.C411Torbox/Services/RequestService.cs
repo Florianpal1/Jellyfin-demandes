@@ -291,6 +291,147 @@ public class RequestService
         return _repository.Get(request.Id) ?? request;
     }
 
+    /// <summary>
+    /// Demande en attente que l'utilisateur (sa propre demande) ou un administrateur peut consulter pour en changer le torrent.
+    /// </summary>
+    public MediaRequest GetChangeableRequest(long id, Guid userId, bool isAdmin)
+    {
+        var request = _repository.Get(id) is { } found && (isAdmin || found.UserId == userId)
+            ? found
+            : throw new RequestException("Demande introuvable.", 404);
+        return request.Status == RequestStatus.Pending
+            ? request
+            : throw new RequestException("Seul le torrent d'une demande en attente de validation peut être changé.", 409);
+    }
+
+    /// <summary>Recherche de torrents pour le même média qu'une demande (même film, saison, épisode ou livre).</summary>
+    public static TorrentSearchRequest SearchContextOf(MediaRequest r) => new()
+    {
+        Kind = r.MediaKind,
+        Name = r.MediaTitle,
+        Year = r.Year,
+        ImageUrl = r.PosterUrl,
+        ProviderIds = ProviderIdsOf(r),
+        Season = r.MediaKind == MediaKind.Series ? r.Season : null,
+        Episode = r.MediaKind == MediaKind.Series ? r.Episode : null,
+    };
+
+    /// <summary>
+    /// Remplace le torrent d'une demande en attente par un autre résultat de recherche du même média.
+    /// Les règles d'auto-validation sont réévaluées : le nouveau torrent peut partir directement sur Torbox,
+    /// ou suivre la demande d'un autre utilisateur qui l'a déjà demandé.
+    /// </summary>
+    public async Task<MediaRequest> ChangeTorrentAsync(long id, Guid userId, string actorName, bool isAdmin, string resultId, CancellationToken ct)
+    {
+        var entry = _cache.Get(resultId)
+            ?? throw new RequestException("Ce résultat a expiré : relancez la recherche.", 410);
+        var res = entry.Result;
+
+        var notices = new List<Notice>();
+        MediaRequest request;
+        bool send = false;
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            request = GetChangeableRequest(id, userId, isAdmin);
+            if (!SameMedia(request, entry.Context))
+            {
+                throw new RequestException("Ce torrent ne correspond pas au média de la demande.", 400);
+            }
+
+            var hash = res.InfoHash ?? (entry.Source?.File is { } f ? TorrentHash.FromTorrentFile(f) : null);
+            if (hash is not null && string.Equals(hash, request.InfoHash, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new RequestException("C'est déjà le torrent de cette demande.", 409);
+            }
+
+            var siblings = hash is null
+                ? new List<MediaRequest>()
+                : _repository.GetActiveByHash(hash).Where(r => r.Id != request.Id).ToList();
+            if (siblings.Any(s => s.UserId == request.UserId))
+            {
+                throw new RequestException("Une autre demande en cours utilise déjà ce torrent.", 409);
+            }
+
+            var oldTitle = request.TorrentTitle;
+            var reason = ApprovalRules.Evaluate(request.Scope, res.SizeBytes, res.Seeders, res.IsCachedOnTorbox, _config.Current);
+            request.TorrentTitle = res.Title;
+            request.SizeBytes = res.SizeBytes;
+            request.Seeders = res.Seeders;
+            request.Leechers = res.Leechers;
+            request.InfoHash = hash;
+            request.ProwlarrGuid = res.Guid;
+            request.MagnetUrl = res.MagnetUrl ?? entry.Source?.Magnet;
+            request.DownloadUrl = res.DownloadUrl;
+            request.WasCachedOnTorbox = res.IsCachedOnTorbox;
+            request.AutoApprovalReason = reason;
+            request.TorboxTorrentId = null;
+            request.TorboxProgress = null;
+            request.LastError = null;
+
+            var who = request.UserId == userId ? request.UserName : $"{actorName} (administrateur)";
+            var sibling = siblings.FirstOrDefault();
+            if (sibling is not null)
+            {
+                request.Status = sibling.Status;
+                request.AutoApprovalReason = sibling.AutoApprovalReason;
+                request.TorboxTorrentId = sibling.TorboxTorrentId;
+                request.TorboxProgress = sibling.TorboxProgress;
+                request.ReviewedBy = sibling.ReviewedBy;
+                request.ReviewedAt = sibling.ReviewedAt;
+                notices.Add(Notice.User(request, $"Le nouveau torrent de « {Describe(request)} » a déjà été demandé : votre demande suit la demande existante."));
+            }
+            else if (reason == AutoApprovalReason.None)
+            {
+                request.Status = RequestStatus.Pending;
+                notices.Add(Notice.Admins(request, $"Torrent changé par {who} pour « {Describe(request)} » : {res.Title} ({FormatSize(res.SizeBytes)}, {res.Seeders} seeders), à valider."));
+            }
+            else
+            {
+                request.Status = RequestStatus.AutoApproved;
+                send = true;
+                var why = reason == AutoApprovalReason.Cached ? "déjà en cache Torbox" : "sous le seuil de taille";
+                notices.Add(Notice.Admins(request, $"Torrent changé par {who} pour « {Describe(request)} », demande auto-validée ({why})."));
+            }
+
+            if (request.UserId != userId && request.UserId != Guid.Empty)
+            {
+                notices.Add(Notice.User(request, $"Un administrateur a remplacé le torrent de votre demande « {Describe(request)} » : {res.Title}."));
+            }
+
+            _repository.Update(request);
+            _logger.LogInformation("Torrent de la demande {Id} changé par {Actor} : « {Old} » → « {New} »", request.Id, actorName, oldTitle, res.Title);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        await NotifyAsync(notices).ConfigureAwait(false);
+        if (send)
+        {
+            await SendToTorboxAsync(request, entry.Source, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        return _repository.Get(request.Id) ?? request;
+    }
+
+    /// <summary>Le résultat de recherche porte sur le même média que la demande (type, saison, épisode et identifiants ou titre).</summary>
+    internal static bool SameMedia(MediaRequest r, TorrentSearchRequest ctx)
+    {
+        var search = SearchContextOf(r);
+        if (search.Kind != ctx.Kind || search.Scope != ctx.Scope
+            || (ctx.Kind == MediaKind.Series && (search.Season != ctx.Season || search.Episode != ctx.Episode)))
+        {
+            return false;
+        }
+
+        var shared = search.ProviderIds.Keys.Where(ctx.ProviderIds.ContainsKey).ToList();
+        return shared.Count > 0
+            ? shared.All(k => string.Equals(search.ProviderIds[k], ctx.ProviderIds[k], StringComparison.OrdinalIgnoreCase))
+            : LibraryLookup.SameTitle(search.Name, ctx.Name) && search.Year == ctx.Year;
+    }
+
     public async Task<MediaRequest> ApproveAsync(long id, string adminName, CancellationToken ct)
     {
         MediaRequest request;

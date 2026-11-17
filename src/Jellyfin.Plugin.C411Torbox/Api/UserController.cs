@@ -174,6 +174,74 @@ public class UserController : C411TorboxControllerBase
         }
     }
 
+    /// <summary>
+    /// Autres torrents du même média qu'une demande en attente (la mienne, ou toute demande pour un admin),
+    /// sans le torrent actuel : pour en changer avant la validation.
+    /// </summary>
+    [HttpPost("Requests/{id}/Alternatives")]
+    public async Task<ActionResult> Alternatives([FromRoute] long id, CancellationToken ct)
+    {
+        MediaRequest request;
+        try
+        {
+            request = _requests.GetChangeableRequest(id, CurrentUserId, IsAdmin);
+        }
+        catch (RequestException ex)
+        {
+            return ErrorResult(ex.StatusCode, ex.Message);
+        }
+
+        if (!_rateLimiter.TryAcquire(CurrentUserId))
+        {
+            return ErrorResult(StatusCodes.Status429TooManyRequests, "Trop de recherches : patientez une minute.");
+        }
+
+        try
+        {
+            var response = await _search.SearchAsync(RequestService.SearchContextOf(request), ct).ConfigureAwait(false);
+            response.Results = response.Results
+                .Where(r => r.InfoHash is null || !string.Equals(r.InfoHash, request.InfoHash, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            return JsonOk(response);
+        }
+        catch (ArgumentException ex)
+        {
+            return ErrorResult(StatusCodes.Status400BadRequest, ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return ErrorResult(StatusCodes.Status503ServiceUnavailable, ex.Message);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "Recherche de torrents de remplacement en échec");
+            return ErrorResult(StatusCodes.Status502BadGateway, ex.Message);
+        }
+        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return ErrorResult(StatusCodes.Status504GatewayTimeout, "Prowlarr ou Torbox n'a pas répondu à temps.");
+        }
+    }
+
+    /// <summary>Remplace le torrent d'une demande en attente par un résultat de <see cref="Alternatives"/>.</summary>
+    [HttpPost("Requests/{id}/Torrent")]
+    public async Task<ActionResult> ChangeTorrent([FromRoute] long id, [FromBody] CreateRequestBody body, CancellationToken ct)
+    {
+        if (!IsRealUser)
+        {
+            return ErrorResult(StatusCodes.Status403Forbidden, "Une demande doit être modifiée par un utilisateur connecté.");
+        }
+
+        try
+        {
+            return JsonOk(await _requests.ChangeTorrentAsync(id, CurrentUserId, CurrentUserName, IsAdmin, body.ResultId, ct).ConfigureAwait(false));
+        }
+        catch (RequestException ex)
+        {
+            return ErrorResult(ex.StatusCode, ex.Message);
+        }
+    }
+
     [HttpGet("Requests/Mine")]
     public ActionResult MyRequests() => JsonOk(_repository.GetByUser(CurrentUserId));
 

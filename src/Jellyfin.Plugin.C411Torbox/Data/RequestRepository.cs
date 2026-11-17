@@ -77,7 +77,8 @@ public class RequestRepository
             using var conn = Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                UPDATE Requests SET UpdatedAt=$UpdatedAt, TorrentTitle=$TorrentTitle, InfoHash=$InfoHash, MagnetUrl=$MagnetUrl, DownloadUrl=$DownloadUrl,
+                UPDATE Requests SET UpdatedAt=$UpdatedAt, TorrentTitle=$TorrentTitle, SizeBytes=$SizeBytes, Seeders=$Seeders, Leechers=$Leechers,
+                    ProwlarrGuid=$ProwlarrGuid, WasCachedOnTorbox=$WasCachedOnTorbox, InfoHash=$InfoHash, MagnetUrl=$MagnetUrl, DownloadUrl=$DownloadUrl,
                     AutoApprovalReason=$AutoApprovalReason, Status=$Status, ReviewedBy=$ReviewedBy, ReviewedAt=$ReviewedAt, RejectReason=$RejectReason,
                     TorboxTorrentId=$TorboxTorrentId, TorboxProgress=$TorboxProgress, LastError=$LastError,
                     ImportProgress=$ImportProgress, ImportedPath=$ImportedPath, MissingOnTorboxSince=$MissingOnTorboxSince,

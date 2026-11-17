@@ -109,6 +109,7 @@ public partial class WebUiTests
         Assert.Equal(userCancel, Call(engine, "canUserCancel", r).AsBoolean());
         Assert.Equal(adminCancel, Call(engine, "canAdminCancel", r).AsBoolean());
         Assert.Equal(markAvailable, Call(engine, "canMarkAvailable", r).AsBoolean());
+        Assert.Equal(status == "Pending", Call(engine, "canChangeTorrent", r).AsBoolean());
     }
 
     [Fact]
