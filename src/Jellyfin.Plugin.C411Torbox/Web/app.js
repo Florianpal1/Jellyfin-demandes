@@ -90,6 +90,11 @@
         return canUserCancel(r) || SENT_STATUSES.includes(r.status);
     }
 
+    /** Le torrent d'une demande peut être remplacé tant qu'elle attend la validation. */
+    function canChangeTorrent(r) {
+        return r.status === 'Pending';
+    }
+
     function canMarkAvailable(r) {
         return SENT_STATUSES.includes(r.status);
     }
@@ -116,7 +121,7 @@
 
     // Tests (moteur JavaScript sans navigateur) : seules les fonctions pures sont exposées.
     if (typeof document === 'undefined') {
-        globalThis.C411Ui = { STATUS_LABELS, formatSize, describe, seedClass, safeImage, canUserCancel, canAdminCancel, canMarkAvailable, episodeLabel, retryText, staleDays };
+        globalThis.C411Ui = { STATUS_LABELS, formatSize, describe, seedClass, safeImage, canUserCancel, canAdminCancel, canChangeTorrent, canMarkAvailable, episodeLabel, retryText, staleDays };
         return;
     }
 
@@ -371,27 +376,87 @@
                 info.append(el('p', { class: 'muted' }, 'Aucun torrent trouvé.'));
                 return;
             }
-            tbody.replaceChildren();
-            for (const t of res.results) {
-                const btn = el('button', { class: 'primary', type: 'button' }, 'Demander');
-                btn.addEventListener('click', () => createRequest(t, btn));
-                tbody.append(el('tr', { class: t.isCachedOnTorbox ? 'cached' : null },
-                    el('td', { class: 'title' }, t.title),
-                    el('td', { class: 'num' }, formatSize(t.sizeBytes)),
-                    el('td', { class: 'num ' + seedClass(t.seeders) }, t.seeders),
-                    el('td', { class: 'num' }, t.leechers),
-                    el('td', null, t.isCachedOnTorbox
-                        ? el('span', { class: 'pill flash', title: 'Déjà présent sur Torbox : disponible immédiatement' }, '⚡ Instantané')
-                        : (t.infoHash ? '' : el('span', { class: 'muted', title: 'Hash inconnu' }, '?'))),
-                    el('td', null, t.wouldAutoApprove
-                        ? el('span', { class: 'pill auto' }, 'Automatique')
-                        : el('span', { class: 'pill' }, 'Admin')),
-                    el('td', null, btn)));
-            }
+            tbody.replaceChildren(...res.results.map((t) => torrentRow(t, 'Demander', createRequest)));
             $('#torrentTable').hidden = false;
         } catch (e) {
             info.replaceChildren(el('p', { class: 'error' }, e.message));
         }
+    }
+
+    /** Ligne d'un torrent trouvé, avec un bouton d'action (demander, ou choisir comme remplaçant). */
+    function torrentRow(t, label, onPick) {
+        const btn = el('button', { class: 'primary', type: 'button' }, label);
+        btn.addEventListener('click', () => onPick(t, btn));
+        return el('tr', { class: t.isCachedOnTorbox ? 'cached' : null },
+            el('td', { class: 'title' }, t.title),
+            el('td', { class: 'num' }, formatSize(t.sizeBytes)),
+            el('td', { class: 'num ' + seedClass(t.seeders) }, t.seeders),
+            el('td', { class: 'num' }, t.leechers),
+            el('td', null, t.isCachedOnTorbox
+                ? el('span', { class: 'pill flash', title: 'Déjà présent sur Torbox : disponible immédiatement' }, '⚡ Instantané')
+                : (t.infoHash ? '' : el('span', { class: 'muted', title: 'Hash inconnu' }, '?'))),
+            el('td', null, t.wouldAutoApprove
+                ? el('span', { class: 'pill auto' }, 'Automatique')
+                : el('span', { class: 'pill' }, 'Admin')),
+            el('td', null, btn));
+    }
+
+    // ---------- changement de torrent d'une demande en attente ----------
+
+    let altTicket = 0;
+
+    /** Propose les autres torrents du même média ; après un choix, onChanged recharge la liste d'origine. */
+    async function openAlternatives(r, onChanged) {
+        const dialog = $('#altDialog');
+        const info = $('#altInfo');
+        const ticket = ++altTicket;
+        $('#altTitle').textContent = 'Changer de torrent · ' + describe(r);
+        $('#altCurrent').textContent = `Torrent actuel : ${r.torrentTitle} (${formatSize(r.sizeBytes)}, ${r.seeders} seeders)`;
+        $('#altTable').hidden = true;
+        info.replaceChildren(el('div', { class: 'spinner' }, 'Recherche des autres torrents…'));
+        if (!dialog.open) dialog.showModal();
+        try {
+            const res = await api('POST', `C411Torbox/Requests/${r.id}/Alternatives`);
+            if (ticket !== altTicket) return;
+            info.replaceChildren();
+            if (res.alreadyInLibrary) {
+                info.append(el('div', { class: 'notice ok' }, 'Ce média est déjà dans la bibliothèque Jellyfin : la demande peut être annulée.'));
+                return;
+            }
+            if (res.warning) info.append(el('div', { class: 'notice warn' }, res.warning));
+            if (!res.results.length) {
+                info.append(el('p', { class: 'muted' }, 'Aucun autre torrent trouvé pour ce média.'));
+                return;
+            }
+            $('#altTable tbody').replaceChildren(...res.results.map((t) => torrentRow(t, 'Choisir', (t2, btn) => changeTorrent(r, t2, btn, onChanged))));
+            $('#altTable').hidden = false;
+        } catch (e) {
+            if (ticket === altTicket) info.replaceChildren(el('p', { class: 'error' }, e.message));
+        }
+    }
+
+    async function changeTorrent(r, t, btn, onChanged) {
+        btn.disabled = true;
+        try {
+            const updated = await api('POST', `C411Torbox/Requests/${r.id}/Torrent`, { ResultId: t.id });
+            $('#altDialog').close();
+            toast(changeMessage(updated), updated.status === 'Failed');
+        } catch (e) {
+            btn.disabled = false;
+            $('#altInfo').replaceChildren(el('p', { class: 'error' }, e.message));
+            return;
+        }
+        onChanged();
+    }
+
+    /** Message affiché après un changement de torrent, selon le nouveau statut de la demande. */
+    function changeMessage(r) {
+        return {
+            Pending: 'Torrent changé : la demande attend la validation d\'un administrateur.',
+            SentToTorbox: 'Torrent changé : la demande a été validée automatiquement et envoyée à Torbox.',
+            CompletedOnTorbox: 'Torrent changé : il était déjà prêt sur Torbox.',
+            Failed: 'Torrent changé, mais l\'envoi à Torbox a échoué : un administrateur va le relancer.'
+        }[r.status] || 'Torrent changé (' + (STATUS_LABELS[r.status] || r.status) + ').';
     }
 
     async function createRequest(t, btn) {
@@ -432,9 +497,14 @@
                     el('td', { class: 'num' }, formatSize(r.sizeBytes)),
                     el('td', null, statusPill(r)),
                     el('td', null, formatDate(r.createdAt)),
-                    el('td', null, canUserCancel(r)
-                        ? el('button', { class: 'ghost', type: 'button', onclick: (e) => cancelMine(r, e.target) }, 'Annuler')
-                        : null)));
+                    el('td', null,
+                        canChangeTorrent(r)
+                            ? el('button', { class: 'ghost', type: 'button', title: 'Choisir un autre torrent pour ce média', onclick: () => openAlternatives(r, () => loadMine()) }, 'Changer de torrent')
+                            : null,
+                        canChangeTorrent(r) && canUserCancel(r) ? ' ' : null,
+                        canUserCancel(r)
+                            ? el('button', { class: 'ghost', type: 'button', onclick: (e) => cancelMine(r, e.target) }, 'Annuler')
+                            : null)));
             }
         } catch (e) {
             tbody.replaceChildren(el('tr', null, el('td', { colspan: 6, class: 'error' }, e.message)));
@@ -499,6 +569,9 @@
                         el('button', { class: 'ok', type: 'button', onclick: (e) => adminAction(r, 'Approve', e.target) },
                             r.status === 'Failed' ? 'Renvoyer' : 'Valider'), ' ',
                         el('button', { class: 'bad', type: 'button', onclick: (e) => adminAction(r, 'Reject', e.target) }, 'Refuser'));
+                    if (canChangeTorrent(r)) {
+                        actions.append(' ', el('button', { class: 'ghost', type: 'button', title: 'Choisir un autre torrent pour ce média', onclick: () => openAlternatives(r, loadAdmin) }, 'Changer de torrent'));
+                    }
                 } else if (r.status === 'ImportFailed') {
                     actions.append(
                         el('button', { class: 'ok', type: 'button', title: 'Retélécharger depuis Torbox et ranger', onclick: (e) => adminAction(r, 'RetryImport', e.target) }, 'Relancer'));
@@ -594,6 +667,8 @@
         $('#mediaForm').addEventListener('submit', searchMedia);
         $('#torrentForm').addEventListener('submit', searchTorrents);
         $('#detailClose').addEventListener('click', () => { $('#mediaDetail').hidden = true; });
+        $('#altClose').addEventListener('click', () => $('#altDialog').close());
+        $('#altDialog').addEventListener('close', () => { altTicket++; });
         $('#episodeToggle').addEventListener('change', (e) => {
             $('#episodeLabel').hidden = !e.target.checked;
             loadEpisodes();

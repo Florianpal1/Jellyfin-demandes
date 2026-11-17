@@ -102,7 +102,7 @@ public sealed class RequestServiceTests : IDisposable
 
     private int CreateTorrentCalls => _http.Calls.Count(c => c.Request.RequestUri!.AbsolutePath.EndsWith("/createtorrent", StringComparison.Ordinal));
 
-    private string AddResult(long sizeBytes, int seeders, bool cached = false, RequestScope scope = RequestScope.Movie, string? hash = Hash)
+    private string AddResult(long sizeBytes, int seeders, bool cached = false, RequestScope scope = RequestScope.Movie, string? hash = Hash, string title = "Dune.2021.MULTi.1080p")
     {
         var context = scope == RequestScope.Movie
             ? new TorrentSearchRequest { Kind = MediaKind.Movie, Name = "Dune", Year = 2021, ProviderIds = new() { ["Imdb"] = "tt1160419" } }
@@ -111,7 +111,7 @@ public sealed class RequestServiceTests : IDisposable
             : new TorrentSearchRequest { Kind = MediaKind.Series, Name = "The Bear", Season = 1, Episode = scope == RequestScope.Episode ? 2 : null, ProviderIds = new() { ["Tvdb"] = "1" } };
         var result = new TorrentResult
         {
-            Title = "Dune.2021.MULTi.1080p",
+            Title = title,
             SizeBytes = sizeBytes,
             Seeders = seeders,
             InfoHash = hash,
@@ -495,6 +495,96 @@ public sealed class RequestServiceTests : IDisposable
         var saved = _repository.Get(r.Id)!;
         Assert.Equal(RequestStatus.DownloadingOnTorbox, saved.Status);
         Assert.Equal("Torbox : stalled (no seeds)", saved.LastError);
+    }
+
+    [Fact]
+    public async Task ChangeTorrent_ReplacesThePendingTorrent_AndStillWaitsForAdmin()
+    {
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(40 * Gb, 50), CancellationToken.None);
+        var other = "b".PadRight(40, 'b');
+
+        var changed = await _service.ChangeTorrentAsync(r.Id, Alice, "alice", false, AddResult(30 * Gb, 80, hash: other, title: "Dune.2021.2160p"), CancellationToken.None);
+
+        Assert.Equal(r.Id, changed.Id);
+        Assert.Equal(RequestStatus.Pending, changed.Status);
+        Assert.Equal("Dune.2021.2160p", changed.TorrentTitle);
+        Assert.Equal(30 * Gb, changed.SizeBytes);
+        Assert.Equal(80, changed.Seeders);
+        Assert.Equal(other, changed.InfoHash);
+        Assert.Equal(0, CreateTorrentCalls);
+        Assert.Contains(_notifications.Sent, n => n.UserId is null && n.Message.StartsWith("Torrent changé par alice", StringComparison.Ordinal));
+        Assert.Single(_repository.GetActive());
+    }
+
+    [Fact]
+    public async Task ChangeTorrent_ToAnAutoApprovableTorrent_SendsItToTorbox()
+    {
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(40 * Gb, 50), CancellationToken.None);
+
+        var changed = await _service.ChangeTorrentAsync(r.Id, Alice, "alice", false, AddResult(10 * Gb, 0, cached: true, hash: "b".PadRight(40, 'b')), CancellationToken.None);
+
+        Assert.Equal(RequestStatus.SentToTorbox, changed.Status);
+        Assert.Equal(AutoApprovalReason.Cached, changed.AutoApprovalReason);
+        Assert.Equal(1, CreateTorrentCalls);
+    }
+
+    [Fact]
+    public async Task ChangeTorrent_OnlyByOwnerOrAdmin_AndAdminChangeNotifiesTheUser()
+    {
+        var r = await _service.CreateAsync(Alice, "alice", AddResult(40 * Gb, 50), CancellationToken.None);
+
+        var notFound = await Assert.ThrowsAsync<RequestException>(() => _service.ChangeTorrentAsync(r.Id, Bob, "bob", false, AddResult(30 * Gb, 50, hash: "b".PadRight(40, 'b')), CancellationToken.None));
+        Assert.Equal(404, notFound.StatusCode);
+
+        var changed = await _service.ChangeTorrentAsync(r.Id, Bob, "bob", true, AddResult(30 * Gb, 50, hash: "b".PadRight(40, 'b'), title: "Dune.Remux"), CancellationToken.None);
+        Assert.Equal("Dune.Remux", changed.TorrentTitle);
+        Assert.Contains(_notifications.Sent, n => n.UserId == Alice && n.Message.Contains("Un administrateur a remplacé le torrent", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ChangeTorrent_IsRefused_WhenNotPending_SameTorrent_OrOtherMedia()
+    {
+        var pending = await _service.CreateAsync(Alice, "alice", AddResult(40 * Gb, 50), CancellationToken.None);
+
+        var same = await Assert.ThrowsAsync<RequestException>(() => _service.ChangeTorrentAsync(pending.Id, Alice, "alice", false, AddResult(40 * Gb, 50), CancellationToken.None));
+        Assert.Equal(409, same.StatusCode);
+
+        var otherMedia = await Assert.ThrowsAsync<RequestException>(() => _service.ChangeTorrentAsync(pending.Id, Alice, "alice", false, AddResult(1 * Gb, 50, scope: RequestScope.Episode, hash: "b".PadRight(40, 'b')), CancellationToken.None));
+        Assert.Equal(400, otherMedia.StatusCode);
+
+        var expired = await Assert.ThrowsAsync<RequestException>(() => _service.ChangeTorrentAsync(pending.Id, Alice, "alice", false, "inconnu", CancellationToken.None));
+        Assert.Equal(410, expired.StatusCode);
+
+        var sent = await _service.CreateAsync(Bob, "bob", AddResult(1 * Gb, 50, hash: "e".PadRight(40, 'e')), CancellationToken.None);
+        var notPending = await Assert.ThrowsAsync<RequestException>(() => _service.ChangeTorrentAsync(sent.Id, Bob, "bob", false, AddResult(2 * Gb, 50, hash: "f".PadRight(40, 'f')), CancellationToken.None));
+        Assert.Equal(409, notPending.StatusCode);
+    }
+
+    [Fact]
+    public async Task ChangeTorrent_ToATorrentAlreadyRequested_FollowsTheExistingRequest()
+    {
+        var other = "b".PadRight(40, 'b');
+        var bob = await _service.CreateAsync(Bob, "bob", AddResult(1 * Gb, 50, hash: other), CancellationToken.None);
+        var alice = await _service.CreateAsync(Alice, "alice", AddResult(40 * Gb, 50), CancellationToken.None);
+
+        var changed = await _service.ChangeTorrentAsync(alice.Id, Alice, "alice", false, AddResult(1 * Gb, 50, hash: other), CancellationToken.None);
+
+        Assert.Equal(bob.Status, changed.Status);
+        Assert.Equal(bob.TorboxTorrentId, changed.TorboxTorrentId);
+        Assert.Equal(1, CreateTorrentCalls);
+    }
+
+    [Fact]
+    public void SearchContextOf_RebuildsTheSameMedia()
+    {
+        var request = new MediaRequest { MediaKind = MediaKind.Series, Scope = RequestScope.Episode, MediaTitle = "The Bear", Season = 1, Episode = 2, TvdbId = "1" };
+        var ctx = RequestService.SearchContextOf(request);
+
+        Assert.Equal(RequestScope.Episode, ctx.Scope);
+        Assert.Equal("1", ctx.ProviderIds["Tvdb"]);
+        Assert.True(RequestService.SameMedia(request, new TorrentSearchRequest { Kind = MediaKind.Series, Name = "The Bear", Season = 1, Episode = 2, ProviderIds = new() { ["Tvdb"] = "1" } }));
+        Assert.False(RequestService.SameMedia(request, new TorrentSearchRequest { Kind = MediaKind.Series, Name = "The Bear", Season = 1, ProviderIds = new() { ["Tvdb"] = "1" } }));
+        Assert.False(RequestService.SameMedia(request, new TorrentSearchRequest { Kind = MediaKind.Series, Name = "The Bear", Season = 1, Episode = 2, ProviderIds = new() { ["Tvdb"] = "2" } }));
     }
 
     [Fact]
