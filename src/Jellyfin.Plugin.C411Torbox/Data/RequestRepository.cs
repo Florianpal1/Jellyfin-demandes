@@ -11,7 +11,7 @@ namespace Jellyfin.Plugin.C411Torbox.Data;
 /// <summary>Stockage SQLite des demandes et des notifications.</summary>
 public class RequestRepository
 {
-    private const int SchemaVersion = 4;
+    private const int SchemaVersion = 5;
 
     private static readonly RequestStatus[] ActiveStatuses =
     [
@@ -56,10 +56,12 @@ public class RequestRepository
             cmd.CommandText = """
                 INSERT INTO Requests (UserId, UserName, CreatedAt, UpdatedAt, MediaKind, Scope, MediaTitle, Year, TmdbId, ImdbId, TvdbId, BookIds,
                     PosterUrl, Season, Episode, TorrentTitle, SizeBytes, Seeders, Leechers, InfoHash, ProwlarrGuid, MagnetUrl, DownloadUrl,
-                    WasCachedOnTorbox, AutoApprovalReason, Status, ReviewedBy, ReviewedAt, RejectReason, TorboxTorrentId, TorboxProgress, LastError, EpisodesInLibraryAtRequest)
+                    WasCachedOnTorbox, AutoApprovalReason, Status, ReviewedBy, ReviewedAt, RejectReason, TorboxTorrentId, TorboxProgress, LastError, EpisodesInLibraryAtRequest,
+                    ReplaceItemId, ReplacedFiles)
                 VALUES ($UserId, $UserName, $CreatedAt, $UpdatedAt, $MediaKind, $Scope, $MediaTitle, $Year, $TmdbId, $ImdbId, $TvdbId, $BookIds,
                     $PosterUrl, $Season, $Episode, $TorrentTitle, $SizeBytes, $Seeders, $Leechers, $InfoHash, $ProwlarrGuid, $MagnetUrl, $DownloadUrl,
-                    $WasCachedOnTorbox, $AutoApprovalReason, $Status, $ReviewedBy, $ReviewedAt, $RejectReason, $TorboxTorrentId, $TorboxProgress, $LastError, $EpisodesInLibraryAtRequest);
+                    $WasCachedOnTorbox, $AutoApprovalReason, $Status, $ReviewedBy, $ReviewedAt, $RejectReason, $TorboxTorrentId, $TorboxProgress, $LastError, $EpisodesInLibraryAtRequest,
+                    $ReplaceItemId, $ReplacedFiles);
                 SELECT last_insert_rowid();
                 """;
             r.CreatedAt = r.CreatedAt == default ? DateTime.UtcNow : r.CreatedAt;
@@ -240,6 +242,8 @@ public class RequestRepository
         Add("$ImportAttempts", r.ImportAttempts);
         Add("$RetryImportAfter", r.RetryImportAfter is null ? null : ToDb(r.RetryImportAfter.Value));
         Add("$StaleNotifiedAt", r.StaleNotifiedAt is null ? null : ToDb(r.StaleNotifiedAt.Value));
+        Add("$ReplaceItemId", r.ReplaceItemId);
+        Add("$ReplacedFiles", r.ReplacedFiles);
     }
 
     private static string ToDb(DateTime d) => d.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
@@ -304,6 +308,8 @@ public class RequestRepository
                 ImportAttempts = (int)(L("ImportAttempts") ?? 0),
                 RetryImportAfter = S("RetryImportAfter") is { } ria ? FromDb(ria) : null,
                 StaleNotifiedAt = S("StaleNotifiedAt") is { } sn ? FromDb(sn) : null,
+                ReplaceItemId = S("ReplaceItemId"),
+                ReplacedFiles = S("ReplacedFiles"),
             });
         }
 
@@ -363,16 +369,28 @@ public class RequestRepository
             }
 
             // v4 : torrent disparu de Torbox, nouvelles tentatives de rangement, demandes qui stagnent.
-            using var v4 = conn.CreateCommand();
-            v4.Transaction = tx;
-            v4.CommandText = """
-                ALTER TABLE Requests ADD COLUMN MissingOnTorboxSince TEXT NULL;
-                ALTER TABLE Requests ADD COLUMN ImportAttempts INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE Requests ADD COLUMN RetryImportAfter TEXT NULL;
-                ALTER TABLE Requests ADD COLUMN StaleNotifiedAt TEXT NULL;
-                PRAGMA user_version = 4;
+            if (version < 4)
+            {
+                using var v4 = conn.CreateCommand();
+                v4.Transaction = tx;
+                v4.CommandText = """
+                    ALTER TABLE Requests ADD COLUMN MissingOnTorboxSince TEXT NULL;
+                    ALTER TABLE Requests ADD COLUMN ImportAttempts INTEGER NOT NULL DEFAULT 0;
+                    ALTER TABLE Requests ADD COLUMN RetryImportAfter TEXT NULL;
+                    ALTER TABLE Requests ADD COLUMN StaleNotifiedAt TEXT NULL;
+                    """;
+                v4.ExecuteNonQuery();
+            }
+
+            // v5 : remplacement d'un média de la bibliothèque (page « Médias » des administrateurs).
+            using var v5 = conn.CreateCommand();
+            v5.Transaction = tx;
+            v5.CommandText = """
+                ALTER TABLE Requests ADD COLUMN ReplaceItemId TEXT NULL;
+                ALTER TABLE Requests ADD COLUMN ReplacedFiles TEXT NULL;
+                PRAGMA user_version = 5;
                 """;
-            v4.ExecuteNonQuery();
+            v5.ExecuteNonQuery();
             tx.Commit();
         }
     }

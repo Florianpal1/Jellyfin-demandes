@@ -108,4 +108,18 @@ public class TorrentSearchServiceTests
         Assert.Empty(response.Results);
         Assert.Empty(http.Calls);
     }
+
+    [Fact]
+    public async Task Search_ForAReplacement_QueriesTheIndexer_EvenIfInLibrary()
+    {
+        var http = new FakeHttp((_, _) => FakeHttp.Json("[]"));
+        var config = new FakeConfig();
+        var service = new TorrentSearchService(
+            Indexers(http, config), new TorboxClient(http, config), new FakeLibrary { MovieInLibrary = true }, new SearchResultCache(), config, new FakeAliases(), NullLogger<TorrentSearchService>.Instance);
+
+        var response = await service.SearchAsync(new TorrentSearchRequest { Kind = MediaKind.Movie, Name = "Film", IgnoreLibrary = true }, CancellationToken.None);
+
+        Assert.False(response.AlreadyInLibrary);
+        Assert.NotEmpty(http.Calls);
+    }
 }

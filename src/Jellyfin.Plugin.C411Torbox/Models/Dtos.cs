@@ -78,6 +78,10 @@ public class TorrentSearchRequest
     [JsonIgnore]
     public IReadOnlyList<string> AlternateNames { get; set; } = Array.Empty<string>();
 
+    /// <summary>Remplacement d'un média de la bibliothèque : chercher même s'il y est déjà (positionné par le serveur).</summary>
+    [JsonIgnore]
+    public bool IgnoreLibrary { get; set; }
+
     [JsonIgnore]
     public RequestScope Scope => Kind switch
     {
@@ -204,6 +208,79 @@ public class ConnectionTestResult
 
     public string Message { get; set; } = string.Empty;
 }
+
+/// <summary>Type d'un élément de la bibliothèque dans la page de gestion des médias.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<LibraryItemType>))]
+public enum LibraryItemType
+{
+    Movie,
+    Series,
+    Season,
+    Episode,
+    Book,
+}
+
+/// <summary>Ordre de la liste des médias.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<LibrarySort>))]
+public enum LibrarySort
+{
+    /// <summary>Ajoutés récemment d'abord.</summary>
+    Recent,
+
+    /// <summary>Par titre.</summary>
+    Name,
+}
+
+/// <summary>Un média de la bibliothèque Jellyfin (page de gestion des médias, réservée aux administrateurs).</summary>
+public class LibraryItem
+{
+    /// <summary>Identifiant Jellyfin de l'élément (32 caractères hexadécimaux).</summary>
+    public string Id { get; set; } = string.Empty;
+
+    public LibraryItemType Type { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public int? Year { get; set; }
+
+    /// <summary>Saisons et épisodes : numéro de saison.</summary>
+    public int? Season { get; set; }
+
+    /// <summary>Épisodes : numéro (et dernier numéro d'un fichier multi-épisodes).</summary>
+    public int? Episode { get; set; }
+
+    public int? EpisodeEnd { get; set; }
+
+    /// <summary>Chemin du fichier (ou du dossier) sur le serveur.</summary>
+    public string? Path { get; set; }
+
+    public long? SizeBytes { get; set; }
+
+    /// <summary>Définition de la vidéo (« 1080p », « 2160p »…), si connue.</summary>
+    public string? Resolution { get; set; }
+
+    public DateTime? DateAdded { get; set; }
+
+    public bool HasImage { get; set; }
+
+    /// <summary>Un remplacement de ce média est en cours (demande active).</summary>
+    public bool Replacing { get; set; }
+
+    /// <summary>Saisons : épisodes présents.</summary>
+    public IReadOnlyList<LibraryItem>? Episodes { get; set; }
+}
+
+public class LibraryPage
+{
+    public IReadOnlyList<LibraryItem> Items { get; set; } = Array.Empty<LibraryItem>();
+
+    public int Total { get; set; }
+
+    public int Start { get; set; }
+}
+
+/// <summary>Ancien fichier d'un média remplacé (et épisodes qu'il contient, pour une série).</summary>
+public sealed record ReplacedFile(string Path, int? Season = null, int? Episode = null, int? EpisodeEnd = null);
 
 public class ProwlarrIndexerInfo
 {

@@ -135,6 +135,50 @@ public partial class WebUiTests
     }
 
     [Fact]
+    public void LibraryHelpers_LabelsImagesAndActions()
+    {
+        var engine = LoadApp();
+        const string Id = "0123456789abcdef0123456789abcdef";
+        Assert.Equal("Dune (2021)", Call(engine, "libraryLabel", Request(engine, "{ type: 'Movie', name: 'Dune', year: 2021 }")).AsString());
+        Assert.Equal("Saison 1", Call(engine, "libraryLabel", Request(engine, "{ type: 'Season', name: 'Saison 1', year: 2022, season: 1 }")).AsString());
+        Assert.Equal("S01E02 · Mains propres", Call(engine, "libraryLabel", Request(engine, "{ type: 'Episode', name: 'Mains propres', season: 1, episode: 2 }")).AsString());
+        Assert.Equal("S01E01-E02 · Pilote", Call(engine, "libraryLabel", Request(engine, "{ type: 'Episode', name: 'Pilote', season: 1, episode: 1, episodeEnd: 2 }")).AsString());
+
+        Assert.Equal($"/jf/Items/{Id}/Images/Primary?fillHeight=96&quality=80", Call(engine, "itemImage", "/jf", Request(engine, $"{{ id: '{Id}', hasImage: true }}")).AsString());
+        Assert.True(Call(engine, "itemImage", "", Request(engine, "{ id: '../../Users', hasImage: true }")).IsNull());
+        Assert.True(Call(engine, "itemImage", "", Request(engine, $"{{ id: '{Id}', hasImage: false }}")).IsNull());
+
+        // Les séries se remplacent saison par saison ; une saison sans fiche Jellyfin (identifiant nul) n'a aucune action.
+        Assert.True(Call(engine, "canReplace", Request(engine, $"{{ id: '{Id}', type: 'Movie' }}")).AsBoolean());
+        Assert.False(Call(engine, "canReplace", Request(engine, $"{{ id: '{Id}', type: 'Movie', replacing: true }}")).AsBoolean());
+        Assert.False(Call(engine, "canReplace", Request(engine, $"{{ id: '{Id}', type: 'Series' }}")).AsBoolean());
+        Assert.True(Call(engine, "canReplace", Request(engine, $"{{ id: '{Id}', type: 'Season', season: 1 }}")).AsBoolean());
+        Assert.False(Call(engine, "canReplace", Request(engine, "{ id: '00000000000000000000000000000000', type: 'Season', season: 1 }")).AsBoolean());
+        Assert.False(Call(engine, "isKnownItem", Request(engine, "{ id: '00000000000000000000000000000000' }")).AsBoolean());
+
+        Assert.Equal("51–100 sur 312", Call(engine, "rangeText", 50, 50, 312).AsString());
+        Assert.Equal("Aucun média.", Call(engine, "rangeText", 0, 0, 0).AsString());
+    }
+
+    [Fact]
+    public void LibraryTypes_MatchServerEnum()
+    {
+        var html = Resource("Web.app.html");
+        var select = Regex.Match(html, "<select id=\"libraryType\"[^>]*>(?<options>.*?)</select>", RegexOptions.Singleline);
+        Assert.True(select.Success);
+        foreach (Match option in Regex.Matches(select.Groups["options"].Value, "value=\"(?<v>[^\"]+)\""))
+        {
+            Assert.True(Enum.TryParse<LibraryItemType>(option.Groups["v"].Value, out _), option.Groups["v"].Value);
+        }
+
+        var sort = Regex.Match(html, "<select id=\"librarySort\"[^>]*>(?<options>.*?)</select>", RegexOptions.Singleline);
+        foreach (Match option in Regex.Matches(sort.Groups["options"].Value, "value=\"(?<v>[^\"]+)\""))
+        {
+            Assert.True(Enum.TryParse<LibrarySort>(option.Groups["v"].Value, out _), option.Groups["v"].Value);
+        }
+    }
+
+    [Fact]
     public void ConfigPage_FieldsMatchPluginConfiguration()
     {
         var html = Resource("Configuration.configPage.html");

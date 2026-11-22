@@ -28,8 +28,11 @@ public class FileDownloader
         _httpClientFactory = httpClientFactory;
     }
 
-    /// <summary>Télécharge <paramref name="url"/> vers <paramref name="destination"/> ; <paramref name="onBytes"/> reçoit les octets écrits.</summary>
-    public virtual async Task DownloadAsync(Uri url, string destination, long expectedSize, Action<long> onBytes, CancellationToken ct)
+    /// <summary>
+    /// Télécharge <paramref name="url"/> vers <paramref name="destination"/> ; <paramref name="onBytes"/> reçoit les octets écrits.
+    /// <paramref name="overwrite"/> : remplace un fichier existant (remplacement d'un média), seulement une fois le nouveau complet.
+    /// </summary>
+    public virtual async Task DownloadAsync(Uri url, string destination, long expectedSize, Action<long> onBytes, CancellationToken ct, bool overwrite = false)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         var part = destination + PartialExtension;
@@ -43,7 +46,7 @@ public class FileDownloader
         if (expectedSize > 0 && existing == expectedSize)
         {
             onBytes(existing);
-            File.Move(part, destination, overwrite: false);
+            File.Move(part, destination, overwrite);
             return;
         }
 
@@ -105,6 +108,6 @@ public class FileDownloader
             }
         }
 
-        File.Move(part, destination, overwrite: false);
+        File.Move(part, destination, overwrite);
     }
 }

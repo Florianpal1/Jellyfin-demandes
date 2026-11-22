@@ -673,4 +673,98 @@ public sealed class RequestServiceTests : IDisposable
         Assert.Contains(_repository.GetNotifications(Alice, isAdmin: false), n => n.Message == "non lue");
         Assert.DoesNotContain(_repository.GetNotifications(Alice, isAdmin: false), n => n.Message == "lue");
     }
+
+    private static LibraryMedia DuneInLibrary(Guid? id = null) => new()
+    {
+        Id = id ?? Guid.NewGuid(),
+        Type = LibraryItemType.Movie,
+        Name = "Dune",
+        Year = 2021,
+        ProviderIds = new Dictionary<string, string> { ["Imdb"] = "tt1160419", ["Tmdb"] = "438631" },
+        Files = [new ReplacedFile("/films/Dune (2021)/Dune.2021.720p.mkv")],
+    };
+
+    [Fact]
+    public async Task Replacement_IsApprovedAndSent_EvenForABigTorrent_AndRemembersTheOldFiles()
+    {
+        _config.Current.AutoImportEnabled = true;
+        _library.MovieInLibrary = true;
+        var media = DuneInLibrary();
+
+        var r = await _service.CreateReplacementAsync(Bob, "admin", media, AddResult(80 * Gb, 2), CancellationToken.None);
+
+        Assert.Equal(RequestStatus.SentToTorbox, r.Status);
+        Assert.Equal("admin", r.ReviewedBy);
+        Assert.Equal(Bob, r.UserId);
+        Assert.Equal(media.Id.ToString("N"), r.ReplaceItemId);
+        Assert.True(r.IsReplacement);
+        Assert.Equal(1, CreateTorrentCalls);
+        var saved = _repository.Get(r.Id)!;
+        Assert.Equal(media.Files, RequestService.ReplacedFilesOf(saved));
+        Assert.Contains(_notifications.Sent, n => n.UserId is null && n.Message.StartsWith("Remplacement de « Dune (2021) »", StringComparison.Ordinal));
+
+        // Le film est déjà dans la bibliothèque : la demande n'est pas « disponible » tant que le nouveau fichier n'est pas rangé.
+        await _service.CheckAvailabilityAsync(CancellationToken.None);
+        Assert.Equal(RequestStatus.SentToTorbox, _repository.Get(r.Id)!.Status);
+
+        saved.Status = RequestStatus.Imported;
+        _repository.Update(saved);
+        await _service.CheckAvailabilityAsync(CancellationToken.None);
+        Assert.Equal(RequestStatus.Available, _repository.Get(r.Id)!.Status);
+    }
+
+    [Fact]
+    public async Task Replacement_RequiresAutoImport()
+    {
+        _config.Current.AutoImportEnabled = false;
+
+        var ex = await Assert.ThrowsAsync<RequestException>(() => _service.CreateReplacementAsync(Bob, "admin", DuneInLibrary(), AddResult(4 * Gb, 50), CancellationToken.None));
+
+        Assert.Equal(409, ex.StatusCode);
+        Assert.Equal(0, CreateTorrentCalls);
+    }
+
+    [Fact]
+    public async Task Replacement_RefusesAnotherMediasTorrent_ASecondReplacement_AndATorrentAlreadyInUse()
+    {
+        _config.Current.AutoImportEnabled = true;
+        var media = DuneInLibrary();
+
+        var wrong = await Assert.ThrowsAsync<RequestException>(() => _service.CreateReplacementAsync(Bob, "admin", media, AddResult(4 * Gb, 50, scope: RequestScope.Season), CancellationToken.None));
+        Assert.Equal(400, wrong.StatusCode);
+
+        await _service.CreateReplacementAsync(Bob, "admin", media, AddResult(4 * Gb, 50), CancellationToken.None);
+        var twice = await Assert.ThrowsAsync<RequestException>(() => _service.CreateReplacementAsync(Bob, "admin", media, AddResult(4 * Gb, 50, hash: "aa" + Hash[2..]), CancellationToken.None));
+        Assert.Equal(409, twice.StatusCode);
+
+        var inUse = await Assert.ThrowsAsync<RequestException>(() => _service.CreateReplacementAsync(Bob, "admin", DuneInLibrary(), AddResult(4 * Gb, 50), CancellationToken.None));
+        Assert.Equal(409, inUse.StatusCode);
+        Assert.Equal(1, CreateTorrentCalls);
+    }
+
+    [Fact]
+    public async Task Replacement_OfASeries_OrWithoutFile_IsRefused()
+    {
+        _config.Current.AutoImportEnabled = true;
+        var series = new LibraryMedia { Id = Guid.NewGuid(), Type = LibraryItemType.Series, Name = "The Bear", Files = [new ReplacedFile("/x.mkv")] };
+        var noFile = new LibraryMedia { Id = Guid.NewGuid(), Type = LibraryItemType.Movie, Name = "Dune", Year = 2021 };
+
+        Assert.Equal(400, (await Assert.ThrowsAsync<RequestException>(() => _service.CreateReplacementAsync(Bob, "admin", series, AddResult(4 * Gb, 50), CancellationToken.None))).StatusCode);
+        Assert.Equal(409, (await Assert.ThrowsAsync<RequestException>(() => _service.CreateReplacementAsync(Bob, "admin", noFile, AddResult(4 * Gb, 50), CancellationToken.None))).StatusCode);
+    }
+
+    [Fact]
+    public void LibraryMedia_SearchesTheSameMedia_EvenIfAlreadyInTheLibrary()
+    {
+        var episode = new LibraryMedia { Type = LibraryItemType.Episode, Name = "The Bear", Season = 1, Episode = 2, ProviderIds = new Dictionary<string, string> { ["Tvdb"] = "1" } };
+        var season = new LibraryMedia { Type = LibraryItemType.Season, Name = "The Bear", Season = 1 };
+
+        var search = episode.ToSearch();
+        Assert.True(search.IgnoreLibrary);
+        Assert.Equal(RequestScope.Episode, search.Scope);
+        Assert.Equal((1, 2), (search.Season!.Value, search.Episode!.Value));
+        Assert.Equal(RequestScope.Season, season.ToSearch().Scope);
+        Assert.Equal(RequestScope.Movie, DuneInLibrary().ToSearch().Scope);
+        Assert.False(new LibraryMedia { Type = LibraryItemType.Season, Name = "x" }.CanReplace);
+    }
 }

@@ -100,4 +100,16 @@ public class MediaRequest
 
     /// <summary>Date à laquelle les admins ont été prévenus que la demande stagne (null : pas encore).</summary>
     public DateTime? StaleNotifiedAt { get; set; }
+
+    /// <summary>
+    /// Remplacement d'un média de la bibliothèque : identifiant de l'élément Jellyfin remplacé (null : demande ordinaire).
+    /// Les anciens fichiers ne sont supprimés qu'une fois les nouveaux rangés.
+    /// </summary>
+    public string? ReplaceItemId { get; set; }
+
+    /// <summary>Anciens fichiers à supprimer après le rangement (JSON ; chemins du serveur, jamais exposés au navigateur).</summary>
+    [JsonIgnore]
+    public string? ReplacedFiles { get; set; }
+
+    public bool IsReplacement => ReplaceItemId is not null;
 }

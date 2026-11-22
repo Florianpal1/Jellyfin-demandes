@@ -119,9 +119,48 @@
         return Math.floor(((now || Date.now()) - new Date(r.createdAt).getTime()) / 86400000);
     }
 
+    /** Libellé d'un média de la bibliothèque (film, série, saison, épisode ou livre). */
+    function libraryLabel(i) {
+        const pad = (n) => String(n).padStart(2, '0');
+        if (i.type === 'Episode') {
+            const num = i.season != null && i.episode != null
+                ? `S${pad(i.season)}E${pad(i.episode)}` + (i.episodeEnd > i.episode ? `-E${pad(i.episodeEnd)}` : '')
+                : 'Épisode';
+            return num + (i.name ? ' · ' + i.name : '');
+        }
+        return i.name + (i.year && i.type !== 'Season' ? ` (${i.year})` : '');
+    }
+
+    /** Vignette Jellyfin d'un élément, ou null (identifiant vérifié : 32 caractères hexadécimaux). */
+    function itemImage(base, i) {
+        return i.hasImage && /^[0-9a-f]{32}$/i.test(i.id) && !/^0+$/.test(i.id)
+            ? `${base}/Items/${i.id}/Images/Primary?fillHeight=96&quality=80`
+            : null;
+    }
+
+    /** Élément connu de Jellyfin (une saison sans fiche a un identifiant nul : aucune action possible). */
+    function isKnownItem(i) {
+        return /^[0-9a-f]{32}$/i.test(i.id) && !/^0+$/.test(i.id);
+    }
+
+    /** Une série se remplace saison par saison ou épisode par épisode. */
+    function canReplace(i) {
+        return isKnownItem(i) && !i.replacing && i.type !== 'Series'
+            && (i.type !== 'Season' || i.season != null)
+            && (i.type !== 'Episode' || (i.season != null && i.episode != null));
+    }
+
+    /** « 1–50 sur 312 ». */
+    function rangeText(start, count, total) {
+        return total === 0 || count === 0 ? 'Aucun média.' : `${start + 1}–${start + count} sur ${total}`;
+    }
+
     // Tests (moteur JavaScript sans navigateur) : seules les fonctions pures sont exposées.
     if (typeof document === 'undefined') {
-        globalThis.C411Ui = { STATUS_LABELS, formatSize, describe, seedClass, safeImage, canUserCancel, canAdminCancel, canChangeTorrent, canMarkAvailable, episodeLabel, retryText, staleDays };
+        globalThis.C411Ui = {
+            STATUS_LABELS, formatSize, describe, seedClass, safeImage, canUserCancel, canAdminCancel, canChangeTorrent, canMarkAvailable,
+            episodeLabel, retryText, staleDays, libraryLabel, itemImage, isKnownItem, canReplace, rangeText
+        };
         return;
     }
 
@@ -151,6 +190,13 @@
         if (r.autoApprovalReason === 'Cached') wrap.append(el('div', { class: 'muted' }, 'auto : déjà en cache Torbox'));
         if (r.autoApprovalReason === 'Size') wrap.append(el('div', { class: 'muted' }, 'auto : sous le seuil'));
         return wrap;
+    }
+
+    /** Média d'une demande, signalé s'il s'agit du remplacement d'un média de la bibliothèque. */
+    function mediaCell(r) {
+        return r.isReplacement
+            ? [describe(r), ' ', el('span', { class: 'pill replace', title: 'L\'ancien fichier sera supprimé une fois le nouveau rangé' }, 'Remplacement')]
+            : describe(r);
     }
 
     // ---------- authentification ----------
@@ -240,7 +286,7 @@
     // ---------- navigation ----------
 
     function showTab(tab) {
-        if (tab === 'admin' && !(state.me && state.me.isAdmin)) tab = 'search';
+        if ((tab === 'admin' || tab === 'library') && !(state.me && state.me.isAdmin)) tab = 'search';
         state.tab = tab;
         document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
         document.querySelectorAll('.view').forEach((v) => { v.hidden = v.id !== 'view-' + tab; });
@@ -248,6 +294,7 @@
         if (tab === 'mine') loadMine();
         if (tab === 'notifications') loadNotifications(true);
         if (tab === 'admin') loadAdmin();
+        if (tab === 'library') loadLibrary();
     }
 
     // ---------- recherche de médias ----------
@@ -401,22 +448,25 @@
             el('td', null, btn));
     }
 
-    // ---------- changement de torrent d'une demande en attente ----------
+    // ---------- choix d'un autre torrent (demande en attente, ou média de la bibliothèque) ----------
 
     let altTicket = 0;
 
-    /** Propose les autres torrents du même média ; après un choix, onChanged recharge la liste d'origine. */
-    async function openAlternatives(r, onChanged) {
+    /**
+     * Fenêtre de choix d'un torrent. opts : title, current (texte), load (renvoie la réponse de recherche),
+     * label (bouton), empty (aucun résultat), onPick(torrent, bouton).
+     */
+    async function openTorrentPicker(opts) {
         const dialog = $('#altDialog');
         const info = $('#altInfo');
         const ticket = ++altTicket;
-        $('#altTitle').textContent = 'Changer de torrent · ' + describe(r);
-        $('#altCurrent').textContent = `Torrent actuel : ${r.torrentTitle} (${formatSize(r.sizeBytes)}, ${r.seeders} seeders)`;
+        $('#altTitle').textContent = opts.title;
+        $('#altCurrent').textContent = opts.current;
         $('#altTable').hidden = true;
-        info.replaceChildren(el('div', { class: 'spinner' }, 'Recherche des autres torrents…'));
+        info.replaceChildren(el('div', { class: 'spinner' }, 'Recherche des torrents…'));
         if (!dialog.open) dialog.showModal();
         try {
-            const res = await api('POST', `C411Torbox/Requests/${r.id}/Alternatives`);
+            const res = await opts.load();
             if (ticket !== altTicket) return;
             info.replaceChildren();
             if (res.alreadyInLibrary) {
@@ -425,14 +475,26 @@
             }
             if (res.warning) info.append(el('div', { class: 'notice warn' }, res.warning));
             if (!res.results.length) {
-                info.append(el('p', { class: 'muted' }, 'Aucun autre torrent trouvé pour ce média.'));
+                info.append(el('p', { class: 'muted' }, opts.empty));
                 return;
             }
-            $('#altTable tbody').replaceChildren(...res.results.map((t) => torrentRow(t, 'Choisir', (t2, btn) => changeTorrent(r, t2, btn, onChanged))));
+            $('#altTable tbody').replaceChildren(...res.results.map((t) => torrentRow(t, opts.label, opts.onPick)));
             $('#altTable').hidden = false;
         } catch (e) {
             if (ticket === altTicket) info.replaceChildren(el('p', { class: 'error' }, e.message));
         }
+    }
+
+    /** Propose les autres torrents du même média ; après un choix, onChanged recharge la liste d'origine. */
+    function openAlternatives(r, onChanged) {
+        return openTorrentPicker({
+            title: 'Changer de torrent · ' + describe(r),
+            current: `Torrent actuel : ${r.torrentTitle} (${formatSize(r.sizeBytes)}, ${r.seeders} seeders)`,
+            load: () => api('POST', `C411Torbox/Requests/${r.id}/Alternatives`),
+            label: 'Choisir',
+            empty: 'Aucun autre torrent trouvé pour ce média.',
+            onPick: (t, btn) => changeTorrent(r, t, btn, onChanged)
+        });
     }
 
     async function changeTorrent(r, t, btn, onChanged) {
@@ -492,7 +554,7 @@
             if (!list.length) tbody.append(el('tr', null, el('td', { colspan: 6, class: 'muted' }, 'Aucune demande pour l\'instant.')));
             for (const r of list) {
                 tbody.append(el('tr', null,
-                    el('td', null, describe(r)),
+                    el('td', null, mediaCell(r)),
                     el('td', { class: 'title muted' }, r.torrentTitle),
                     el('td', { class: 'num' }, formatSize(r.sizeBytes)),
                     el('td', null, statusPill(r)),
@@ -584,7 +646,7 @@
                 }
                 const days = staleDays(r);
                 tbody.append(el('tr', { class: r.wasCachedOnTorbox ? 'cached' : null },
-                    el('td', null, describe(r)),
+                    el('td', null, mediaCell(r)),
                     el('td', null, r.userName),
                     el('td', { class: 'title muted' }, r.torrentTitle),
                     el('td', { class: 'num' }, formatSize(r.sizeBytes)),
@@ -638,6 +700,143 @@
         $('#pendingBadge').hidden = count === 0;
     }
 
+    // ---------- médias de la bibliothèque (administrateurs) ----------
+
+    const LIBRARY_PAGE = 50;
+    const library = { start: 0 };
+
+    async function loadLibrary(start) {
+        if (typeof start === 'number') library.start = start;
+        const tbody = $('#libraryTable tbody');
+        tbody.replaceChildren(el('tr', null, el('td', { colspan: 6, class: 'spinner' }, 'Chargement…')));
+        $('#libraryPrev').disabled = true;
+        $('#libraryNext').disabled = true;
+        try {
+            const query = new URLSearchParams({ type: $('#libraryType').value, sort: $('#librarySort').value, start: library.start, limit: LIBRARY_PAGE });
+            const search = $('#librarySearch').value.trim();
+            if (search) query.set('search', search);
+            const page = await api('GET', 'C411Torbox/Admin/Library?' + query);
+            tbody.replaceChildren();
+            if (!page.items.length) tbody.append(el('tr', null, el('td', { colspan: 6, class: 'muted' }, 'Aucun média.')));
+            for (const i of page.items) tbody.append(libraryRow(i, null));
+            $('#libraryRange').textContent = rangeText(page.start, page.items.length, page.total);
+            $('#libraryPrev').disabled = library.start === 0;
+            $('#libraryNext').disabled = library.start + page.items.length >= page.total;
+        } catch (e) {
+            tbody.replaceChildren(el('tr', null, el('td', { colspan: 6, class: 'error' }, e.message)));
+        }
+    }
+
+    /** Libellé complet (avec le nom de la série pour une saison ou un épisode). */
+    function fullLabel(i, series) {
+        return series ? `${libraryLabel(series)} – ${libraryLabel(i)}` : libraryLabel(i);
+    }
+
+    /** Ligne d'un média ; series : la série parente (fenêtre des saisons), sinon null. */
+    function libraryRow(i, series, rowClass) {
+        const img = itemImage(BASE, i);
+        const actions = el('td', { class: 'actions' });
+        if (i.type === 'Series') {
+            actions.append(el('button', { class: 'ghost', type: 'button', onclick: () => openSeasons(i) }, 'Saisons et épisodes'), ' ');
+        }
+        if (i.replacing) {
+            actions.append(el('span', { class: 'pill replace', title: 'Suivi dans l\'onglet Administration' }, 'Remplacement en cours'), ' ');
+        } else if (canReplace(i)) {
+            actions.append(el('button', { class: 'ghost', type: 'button', title: 'Choisir un autre torrent : l\'ancien fichier sera supprimé une fois le nouveau rangé', onclick: () => openReplace(i, series) }, 'Remplacer'), ' ');
+        }
+        if (isKnownItem(i)) {
+            actions.append(el('button', { class: 'bad', type: 'button', onclick: (e) => deleteItem(i, series, e.target) }, 'Supprimer'));
+        }
+        return el('tr', { class: rowClass || null },
+            el('td', { class: 'thumb' }, img ? el('img', { src: img, alt: '', loading: 'lazy' }) : null),
+            el('td', { class: 'title' }, el('div', null, libraryLabel(i)), i.path ? el('div', { class: 'muted path' }, i.path) : null),
+            el('td', null, i.resolution || ''),
+            el('td', { class: 'num' }, formatSize(i.sizeBytes)),
+            el('td', null, formatDate(i.dateAdded)),
+            actions);
+    }
+
+    let seasonsTicket = 0;
+
+    /** Saisons d'une série et leurs épisodes, avec les mêmes actions que la liste. */
+    async function openSeasons(s) {
+        const dialog = $('#seasonsDialog');
+        const body = $('#seasonsBody');
+        const ticket = ++seasonsTicket;
+        $('#seasonsTitle').textContent = libraryLabel(s);
+        body.replaceChildren(el('div', { class: 'spinner' }, 'Chargement des épisodes…'));
+        if (!dialog.open) dialog.showModal();
+        try {
+            const seasons = await api('GET', `C411Torbox/Admin/Library/${s.id}/Seasons`);
+            if (ticket !== seasonsTicket) return;
+            if (!seasons.length) {
+                body.replaceChildren(el('p', { class: 'muted' }, 'Aucun épisode de cette série dans la bibliothèque.'));
+                return;
+            }
+            const tbody = el('tbody');
+            for (const season of seasons) {
+                tbody.append(libraryRow(season, s, 'season-row'));
+                for (const e of season.episodes || []) tbody.append(libraryRow(e, s, 'episode-row'));
+            }
+            const head = ['', 'Média', 'Qualité', 'Taille', 'Ajouté le', ''].map((h) => el('th', null, h));
+            body.replaceChildren(el('div', { class: 'table-wrap' }, el('table', null, el('thead', null, el('tr', null, head)), tbody)));
+        } catch (e) {
+            if (ticket === seasonsTicket) body.replaceChildren(el('p', { class: 'error' }, e.message));
+        }
+    }
+
+    /** Après une action : recharge la fenêtre des saisons, ou la liste. */
+    function reloadLibrary(series) {
+        if (series && $('#seasonsDialog').open) openSeasons(series);
+        else loadLibrary();
+    }
+
+    function openReplace(i, series) {
+        const current = [i.resolution, i.sizeBytes ? formatSize(i.sizeBytes) : null].filter(Boolean).join(', ');
+        return openTorrentPicker({
+            title: 'Remplacer · ' + fullLabel(i, series),
+            current: (current ? `Actuel : ${current}. ` : '') + 'L\'ancien fichier sera supprimé une fois le nouveau téléchargé et rangé.',
+            load: () => api('POST', `C411Torbox/Admin/Library/${i.id}/Alternatives`),
+            label: 'Remplacer',
+            empty: 'Aucun torrent trouvé pour ce média.',
+            onPick: (t, btn) => replaceItem(i, series, t, btn)
+        });
+    }
+
+    async function replaceItem(i, series, t, btn) {
+        if (!window.confirm(`Remplacer « ${fullLabel(i, series)} » par « ${t.title} » ?\n\nL'ancien fichier sera supprimé du disque une fois le nouveau téléchargé et rangé.`)) return;
+        btn.disabled = true;
+        try {
+            const r = await api('POST', `C411Torbox/Admin/Library/${i.id}/Replace`, { ResultId: t.id });
+            $('#altDialog').close();
+            toast(r.status === 'Failed'
+                ? 'Remplacement enregistré, mais l\'envoi à Torbox a échoué : ' + (r.lastError || '') + ' (Administration → Renvoyer).'
+                : 'Remplacement lancé : suivez-le dans l\'onglet Administration.', r.status === 'Failed');
+        } catch (e) {
+            btn.disabled = false;
+            $('#altInfo').replaceChildren(el('p', { class: 'error' }, e.message));
+            return;
+        }
+        reloadLibrary(series);
+    }
+
+    async function deleteItem(i, series, btn) {
+        const what = i.type === 'Series' ? 'toute la série et les fichiers de tous ses épisodes'
+            : i.type === 'Season' ? 'la saison et les fichiers de ses épisodes'
+            : 'le média et ses fichiers';
+        if (!window.confirm(`Supprimer définitivement « ${fullLabel(i, series)} » ?\n\nCela retire ${what} de Jellyfin et du disque. Action irréversible.`)) return;
+        btn.disabled = true;
+        try {
+            await api('DELETE', `C411Torbox/Admin/Library/${i.id}`);
+            toast(`« ${fullLabel(i, series)} » supprimé.`);
+        } catch (e) {
+            btn.disabled = false;
+            toast(e.message, true);
+            return;
+        }
+        reloadLibrary(series);
+    }
+
     // ---------- démarrage ----------
 
     async function start() {
@@ -656,6 +855,7 @@
         $('#tabs').hidden = false;
         $('#userName').textContent = state.me.name;
         $('#adminTab').hidden = !state.me.isAdmin;
+        $('#libraryTab').hidden = !state.me.isAdmin;
         showTab((window.location.hash || '#search').substring(1));
         loadNotifications(false);
         updatePendingBadge(null);
@@ -668,6 +868,8 @@
         $('#torrentForm').addEventListener('submit', searchTorrents);
         $('#detailClose').addEventListener('click', () => { $('#mediaDetail').hidden = true; });
         $('#altClose').addEventListener('click', () => $('#altDialog').close());
+        $('#seasonsClose').addEventListener('click', () => $('#seasonsDialog').close());
+        $('#seasonsDialog').addEventListener('close', () => { seasonsTicket++; });
         $('#altDialog').addEventListener('close', () => { altTicket++; });
         $('#episodeToggle').addEventListener('change', (e) => {
             $('#episodeLabel').hidden = !e.target.checked;
@@ -684,6 +886,11 @@
         });
         $('#adminFilter').addEventListener('change', loadAdmin);
         $('#adminRefresh').addEventListener('click', loadAdmin);
+        $('#libraryForm').addEventListener('submit', (e) => { e.preventDefault(); loadLibrary(0); });
+        $('#libraryType').addEventListener('change', () => loadLibrary(0));
+        $('#librarySort').addEventListener('change', () => loadLibrary(0));
+        $('#libraryPrev').addEventListener('click', () => loadLibrary(Math.max(0, library.start - LIBRARY_PAGE)));
+        $('#libraryNext').addEventListener('click', () => loadLibrary(library.start + LIBRARY_PAGE));
         $('#mineRefresh').addEventListener('click', () => loadMine(true));
         document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
         start();

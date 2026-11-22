@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.C411Torbox.Data;
@@ -416,6 +417,122 @@ public class RequestService
         return _repository.Get(request.Id) ?? request;
     }
 
+    /// <summary>
+    /// Remplace un média de la bibliothèque par un autre torrent (page « Médias » d'un administrateur) : la demande
+    /// est validée d'office et envoyée à Torbox ; une fois les nouveaux fichiers rangés, les anciens sont supprimés.
+    /// </summary>
+    public async Task<MediaRequest> CreateReplacementAsync(Guid adminId, string adminName, LibraryMedia media, string resultId, CancellationToken ct)
+    {
+        if (!_config.Current.AutoImportEnabled)
+        {
+            throw new RequestException("Le remplacement d'un fichier nécessite le téléchargement et rangement automatiques (configuration du plugin).", 409);
+        }
+
+        if (!media.CanReplace)
+        {
+            throw new RequestException("Ce média ne peut pas être remplacé : remplacez-le saison par saison ou épisode par épisode.", 400);
+        }
+
+        if (media.Files.Count == 0)
+        {
+            throw new RequestException("Aucun fichier à remplacer pour ce média (dossier DVD / Blu-ray ou fichier introuvable).", 409);
+        }
+
+        var entry = _cache.Get(resultId)
+            ?? throw new RequestException("Ce résultat a expiré : relancez la recherche.", 410);
+        var res = entry.Result;
+        var ctx = media.ToSearch();
+
+        MediaRequest request;
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var itemId = media.Id.ToString("N");
+            if (_repository.GetActive().FirstOrDefault(r => r.ReplaceItemId == itemId) is { } running)
+            {
+                throw new RequestException($"Un remplacement de ce média est déjà en cours (« {running.TorrentTitle} », {StatusLabel(running.Status)}).", 409);
+            }
+
+            var hash = res.InfoHash ?? (entry.Source?.File is { } f ? TorrentHash.FromTorrentFile(f) : null);
+            if (hash is not null && _repository.GetActiveByHash(hash).FirstOrDefault() is { } sibling)
+            {
+                throw new RequestException($"Ce torrent est déjà utilisé par une demande en cours (« {Describe(sibling)} ») : choisissez-en un autre ou attendez la fin.", 409);
+            }
+
+            var ids = LibraryLookup.FilterIds(ctx.ProviderIds);
+            var bookIds = LibraryLookup.FilterBookIds(ctx.ProviderIds);
+            request = new MediaRequest
+            {
+                UserId = adminId,
+                UserName = adminName,
+                MediaKind = ctx.Kind,
+                Scope = ctx.Scope,
+                MediaTitle = ctx.Name,
+                Year = ctx.Year,
+                TmdbId = ids.GetValueOrDefault("Tmdb"),
+                ImdbId = ids.GetValueOrDefault("Imdb"),
+                TvdbId = ids.GetValueOrDefault("Tvdb"),
+                BookIds = FormatBookIds(bookIds),
+                Season = ctx.Season,
+                Episode = ctx.Episode,
+                ReplaceItemId = itemId,
+                ReplacedFiles = JsonSerializer.Serialize(media.Files),
+            };
+            if (!SameMedia(request, entry.Context))
+            {
+                throw new RequestException("Ce torrent ne correspond pas au média à remplacer.", 400);
+            }
+
+            request.TorrentTitle = res.Title;
+            request.SizeBytes = res.SizeBytes;
+            request.Seeders = res.Seeders;
+            request.Leechers = res.Leechers;
+            request.InfoHash = hash;
+            request.ProwlarrGuid = res.Guid;
+            request.MagnetUrl = res.MagnetUrl ?? entry.Source?.Magnet;
+            request.DownloadUrl = res.DownloadUrl;
+            request.WasCachedOnTorbox = res.IsCachedOnTorbox;
+            request.Status = RequestStatus.Approved;
+            request.ReviewedBy = adminName;
+            request.ReviewedAt = Now;
+            _repository.Insert(request);
+            _logger.LogInformation(
+                "Remplacement de « {Media} » demandé par {Admin} : « {Torrent} » ({Count} ancien(s) fichier(s))",
+                Describe(request),
+                adminName,
+                res.Title,
+                media.Files.Count);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        await NotifyAsync([Notice.Admins(request, $"Remplacement de « {Describe(request)} » lancé par {adminName} : {res.Title} ({FormatSize(res.SizeBytes)}). L'ancien fichier sera supprimé une fois le nouveau rangé.")]).ConfigureAwait(false);
+
+        // Pas d'annulation : une déconnexion du navigateur ne doit pas laisser la demande à moitié envoyée.
+        await SendToTorboxAsync(request, entry.Source, CancellationToken.None).ConfigureAwait(false);
+        return _repository.Get(request.Id) ?? request;
+    }
+
+    /// <summary>Anciens fichiers d'une demande de remplacement (liste vide pour une demande ordinaire).</summary>
+    public static IReadOnlyList<ReplacedFile> ReplacedFilesOf(MediaRequest r)
+    {
+        if (string.IsNullOrEmpty(r.ReplacedFiles))
+        {
+            return Array.Empty<ReplacedFile>();
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<ReplacedFile>>(r.ReplacedFiles) ?? new List<ReplacedFile>();
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<ReplacedFile>();
+        }
+    }
+
     /// <summary>Le résultat de recherche porte sur le même média que la demande (type, saison, épisode et identifiants ou titre).</summary>
     internal static bool SameMedia(MediaRequest r, TorrentSearchRequest ctx)
     {
@@ -759,7 +876,8 @@ public class RequestService
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            foreach (var r in _repository.GetActive().Where(r => SentStatuses.Contains(r.Status)))
+            // Un remplacement porte sur un média déjà présent : il n'est disponible qu'une fois les nouveaux fichiers rangés.
+            foreach (var r in _repository.GetActive().Where(r => SentStatuses.Contains(r.Status) && (!r.IsReplacement || r.Status == RequestStatus.Imported)))
             {
                 var ids = ProviderIdsOf(r);
                 bool available = r.Scope switch
@@ -767,6 +885,7 @@ public class RequestService
                     RequestScope.Movie => _library.IsMovieInLibrary(ids),
                     RequestScope.Episode => _library.CountEpisodes(ids, r.Season ?? 0, r.Episode) > 0,
                     RequestScope.Book => _library.IsBookAvailable(ids, r.MediaTitle, r.ImportedPath, r.CreatedAt),
+                    _ when r.IsReplacement => _library.CountEpisodes(ids, r.Season ?? 0, null) > 0,
                     _ => _library.CountEpisodes(ids, r.Season ?? 0, null) > r.EpisodesInLibraryAtRequest,
                 };
                 if (!available)

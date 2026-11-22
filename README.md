@@ -8,6 +8,7 @@ Plugin Jellyfin **12.2** (usage privé) :
 - **Téléchargement et rangement automatiques** (option, depuis la 0.3.0) : remplace l'application « RealDebrid » + Radarr / Sonarr. Une fois le torrent terminé sur Torbox, le plugin télécharge les fichiers sur le NAS (avec reprise), puis les range au format standard Radarr / Sonarr. Le média est connu d'après la fiche TMDB de la demande ; seuls les numéros d'épisode sont lus dans les noms de fichiers.
 - Suivi : progression Torbox, puis progression du téléchargement vers le NAS, passage en « Disponible » quand le média arrive dans Jellyfin, notifications (dans la page + webhook Discord optionnel).
 - **Changement de torrent** : tant qu'une demande attend la validation, son auteur ou un admin peut choisir un autre torrent du même média (même film, saison, épisode ou livre) ; les règles d'auto-validation sont réappliquées au nouveau torrent.
+- **Gestion des médias** (administrateurs) : liste des médias de la bibliothèque, suppression, et remplacement d'un fichier par un autre torrent (l'ancien fichier est supprimé une fois le nouveau rangé).
 - **Annulation** : un utilisateur annule sa demande tant qu'elle n'est pas partie sur Torbox ; un admin annule toute demande en cours (avec, en option, la suppression du torrent sur Torbox) ou la marque « Disponible » si Jellyfin ne l'a pas reconnue.
 - **Séries** : choix de l'épisode dans la liste de la saison (titres, épisodes déjà présents grisés), ou saisie du numéro si la liste est inconnue.
 - **Surveillance** : un torrent supprimé ou en erreur sur Torbox passe la demande « En échec » (un admin la renvoie) ; un torrent sans source est signalé sous son statut ; les demandes toujours en cours après quelques jours sont signalées aux admins.
@@ -114,6 +115,9 @@ L'intervalle de suivi Torbox (10 min par défaut) se règle dans Tableau de bord
 
 - **Utilisateurs** : `https://<votre-jellyfin>/demandes/ui` (`/C411Torbox/ui` avant la 0.5.0) (le lien exact est affiché dans la page de configuration). La page reprend la session du client web Jellyfin ; sinon elle propose de se connecter avec le compte Jellyfin. Navigateur uniquement (pas dans les applis TV / mobiles).
 - **Administrateurs** : onglet « Administration » de la même page, ou menu **Demandes** du tableau de bord.
+- **Gestion des médias** (administrateurs, onglet « Médias », depuis la 0.10.0) : liste des films, séries et livres de la bibliothèque (recherche par titre, tri par date d'ajout ou par titre, qualité, taille), avec les saisons et épisodes de chaque série.
+  - **Supprimer** retire le média de Jellyfin et efface ses fichiers du disque (comme « Supprimer le média » de Jellyfin). Une saison est supprimée épisode par épisode, sans toucher au reste de la série.
+  - **Remplacer** propose les torrents C411 du même film, de la même saison, du même épisode ou du même livre. Le torrent choisi part directement sur Torbox (pas de validation : c'est un admin qui le choisit), puis est téléchargé et rangé comme une demande ; la demande apparaît dans l'onglet Administration avec l'étiquette « Remplacement ». **Une fois le nouveau fichier rangé**, l'ancien est supprimé avec ses sous-titres, `.nfo` et vignette du même nom. Un film garde son dossier actuel ; un fichier au même nom est écrasé seulement quand le nouveau est complet. Pour une saison, un ancien épisode absent du nouveau torrent est conservé (les admins sont prévenus). Nécessite le téléchargement et rangement automatiques.
 
 ## Développement
 
