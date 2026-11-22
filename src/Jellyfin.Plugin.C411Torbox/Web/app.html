@@ -12,6 +12,7 @@
         <div class="brand">🎬 Demandes</div>
         <nav id="tabs" class="tabs" hidden>
             <button data-tab="search" class="tab active">Rechercher</button>
+            <button data-tab="cache" class="tab">En cache ⚡</button>
             <button data-tab="mine" class="tab">Mes demandes</button>
             <button data-tab="notifications" class="tab">Notifications <span id="notifBadge" class="badge" hidden></span></button>
             <button data-tab="admin" class="tab" id="adminTab" hidden>Administration <span id="pendingBadge" class="badge" hidden></span></button>
@@ -76,6 +77,21 @@
                     </table>
                 </div>
             </div>
+        </section>
+
+        <section id="view-cache" class="view" hidden>
+            <h1>Disponible en cache Torbox</h1>
+            <p class="muted">Dernières sorties C411 déjà présentes sur Torbox : une demande arrive sans attendre le téléchargement du torrent.</p>
+            <div class="inline-form">
+                <select id="cacheKind" aria-label="Type">
+                    <option value="Movie">Films</option>
+                    <option value="Series">Séries</option>
+                </select>
+                <label class="check" id="cacheHideLibraryLabel"><input id="cacheHideLibrary" type="checkbox" checked> Masquer les films déjà dans la bibliothèque</label>
+                <button id="cacheRefresh" class="ghost" type="button">Actualiser</button>
+            </div>
+            <p id="cacheInfo" class="muted"></p>
+            <div id="cacheResults" class="cards"></div>
         </section>
 
         <section id="view-mine" class="view" hidden>

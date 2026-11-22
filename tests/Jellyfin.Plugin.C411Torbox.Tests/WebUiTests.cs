@@ -161,6 +161,21 @@ public partial class WebUiTests
     }
 
     [Fact]
+    public void CatalogHelpers_SummaryAndTarget()
+    {
+        var engine = LoadApp();
+        Assert.Equal("1 torrent", Call(engine, "catalogSummary", Request(engine, "{ releaseCount: 1, seasons: [] }")).AsString());
+        Assert.Equal("3 torrents · saisons 1, 3", Call(engine, "catalogSummary", Request(engine, "{ releaseCount: 3, seasons: [1, 3] }")).AsString());
+
+        Assert.True(Call(engine, "catalogTarget", Request(engine, "{ kind: 'Movie', releases: [] }")).IsNull());
+        var episode = Call(engine, "catalogTarget", Request(engine, "{ kind: 'Series', seasons: [1, 3], releases: [{ season: null }, { season: 3, episode: 2 }, { season: 1, episode: null }] }")).AsObject();
+        Assert.Equal((3d, 2d), (episode.Get("season").AsNumber(), episode.Get("episode").AsNumber()));
+        var season = Call(engine, "catalogTarget", Request(engine, "{ kind: 'Series', seasons: [2, 4], releases: [{ season: null }] }")).AsObject();
+        Assert.Equal(4d, season.Get("season").AsNumber());
+        Assert.True(season.Get("episode").IsNull());
+    }
+
+    [Fact]
     public void LibraryTypes_MatchServerEnum()
     {
         var html = Resource("Web.app.html");

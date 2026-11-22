@@ -28,6 +28,7 @@ public class UserController : C411TorboxControllerBase
     private readonly SearchRateLimiter _rateLimiter;
     private readonly IEpisodeTitleProvider _episodes;
     private readonly ILibraryLookup _library;
+    private readonly CachedCatalogService _catalog;
     private readonly ILogger<UserController> _logger;
 
     public UserController(
@@ -38,6 +39,7 @@ public class UserController : C411TorboxControllerBase
         SearchRateLimiter rateLimiter,
         IEpisodeTitleProvider episodes,
         ILibraryLookup library,
+        CachedCatalogService catalog,
         ILogger<UserController> logger)
     {
         _metadata = metadata;
@@ -47,7 +49,44 @@ public class UserController : C411TorboxControllerBase
         _rateLimiter = rateLimiter;
         _episodes = episodes;
         _library = library;
+        _catalog = catalog;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Dernières sorties C411 déjà en cache Torbox, regroupées par film ou série (page « En cache »).
+    /// Catalogue commun gardé 30 min ; <paramref name="refresh"/> compte comme une recherche.
+    /// </summary>
+    [HttpGet("Catalog")]
+    public async Task<ActionResult> Catalog([FromQuery] MediaKind kind = MediaKind.Movie, [FromQuery] bool refresh = false, CancellationToken ct = default)
+    {
+        if (kind is not (MediaKind.Movie or MediaKind.Series))
+        {
+            return ErrorResult(StatusCodes.Status400BadRequest, "Seuls les films et les séries ont une page « En cache ».");
+        }
+
+        if (refresh && !_rateLimiter.TryAcquire(CurrentUserId))
+        {
+            return ErrorResult(StatusCodes.Status429TooManyRequests, "Trop de recherches : patientez une minute.");
+        }
+
+        try
+        {
+            return JsonOk(await _catalog.GetAsync(kind, refresh, ct).ConfigureAwait(false));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return ErrorResult(StatusCodes.Status503ServiceUnavailable, ex.Message);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TorboxException)
+        {
+            _logger.LogWarning(ex, "Page « En cache » en échec");
+            return ErrorResult(StatusCodes.Status502BadGateway, ex.Message);
+        }
+        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return ErrorResult(StatusCodes.Status504GatewayTimeout, "C411 ou Torbox n'a pas répondu à temps.");
+        }
     }
 
     [HttpGet("Me")]
