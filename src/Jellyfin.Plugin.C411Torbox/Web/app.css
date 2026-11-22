@@ -224,3 +224,13 @@ tr.cached { background: rgba(0, 164, 220, .08); }
 }
 .dialog::backdrop { background: rgba(0, 0, 0, .6); }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* Onglet « Médias » (administrateurs) */
+td.thumb { width: 1%; padding-right: 0; }
+td.thumb img { height: 48px; max-width: 86px; object-fit: cover; border-radius: 4px; display: block; }
+td.actions { white-space: nowrap; }
+.path { font-size: .8em; word-break: break-all; }
+.pager { justify-content: center; }
+.pill.replace { border-color: var(--accent-2); color: var(--accent-2); }
+tr.season-row td { background: var(--panel-2); font-weight: 600; }
+tr.episode-row td.title { padding-left: 24px; }

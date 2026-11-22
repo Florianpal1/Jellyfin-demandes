@@ -15,6 +15,7 @@
             <button data-tab="mine" class="tab">Mes demandes</button>
             <button data-tab="notifications" class="tab">Notifications <span id="notifBadge" class="badge" hidden></span></button>
             <button data-tab="admin" class="tab" id="adminTab" hidden>Administration <span id="pendingBadge" class="badge" hidden></span></button>
+            <button data-tab="library" class="tab" id="libraryTab" hidden>Médias</button>
         </nav>
         <div class="user"><span id="userName"></span> <a id="backLink" href="#">Retour à Jellyfin</a></div>
     </header>
@@ -118,7 +119,44 @@
                 </table>
             </div>
         </section>
+
+        <section id="view-library" class="view" hidden>
+            <h1>Médias de la bibliothèque</h1>
+            <form id="libraryForm" class="inline-form">
+                <select id="libraryType" aria-label="Type">
+                    <option value="Movie">Films</option>
+                    <option value="Series">Séries</option>
+                    <option value="Book">Livres</option>
+                </select>
+                <input id="librarySearch" type="search" placeholder="Titre…" maxlength="200" aria-label="Titre">
+                <select id="librarySort" aria-label="Tri">
+                    <option value="Recent">Ajoutés récemment</option>
+                    <option value="Name">Par titre</option>
+                </select>
+                <button type="submit" class="primary">Afficher</button>
+            </form>
+            <p class="muted">Remplacer : choisissez un autre torrent ; l'ancien fichier est supprimé une fois le nouveau rangé. Supprimer : retire le média de Jellyfin et efface ses fichiers du disque.</p>
+            <div class="table-wrap">
+                <table id="libraryTable">
+                    <thead><tr><th></th><th>Média</th><th>Qualité</th><th>Taille</th><th>Ajouté le</th><th></th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="inline-form pager">
+                <button id="libraryPrev" type="button" class="ghost">‹ Précédents</button>
+                <span id="libraryRange" class="muted"></span>
+                <button id="libraryNext" type="button" class="ghost">Suivants ›</button>
+            </div>
+        </section>
     </main>
+
+    <dialog id="seasonsDialog" class="panel dialog" aria-labelledby="seasonsTitle">
+        <div class="dialog-head">
+            <h2 id="seasonsTitle">Saisons</h2>
+            <button type="button" id="seasonsClose" class="ghost">Fermer</button>
+        </div>
+        <div id="seasonsBody"></div>
+    </dialog>
 
     <dialog id="altDialog" class="panel dialog" aria-labelledby="altTitle">
         <div class="dialog-head">

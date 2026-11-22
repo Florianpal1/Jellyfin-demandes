@@ -81,6 +81,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<IndexerProvider>();
         serviceCollection.AddSingleton<TorboxClient>();
         serviceCollection.AddSingleton<ILibraryLookup, LibraryLookup>();
+        serviceCollection.AddSingleton<IMediaLibrary, MediaLibrary>();
         serviceCollection.AddSingleton<MetadataSearchService>();
         serviceCollection.AddSingleton<ITitleAliasProvider>(sp => sp.GetRequiredService<MetadataSearchService>());
         serviceCollection.AddSingleton<TorrentSearchService>();

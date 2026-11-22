@@ -160,10 +160,26 @@ public class ImportService
         var primary = group.OrderBy(r => r.Scope switch { RequestScope.Season => 0, RequestScope.Episode => 1, _ => 2 }).First();
         bool IsMine(MediaRequest r) => r.Status == RequestStatus.Importing && SameTorrent(r, primary);
 
+        // Remplacement d'un média de la bibliothèque : anciens fichiers, supprimés une fois les nouveaux rangés.
+        var replaced = group.SelectMany(RequestService.ReplacedFilesOf).DistinctBy(f => f.Path, PathComparer).ToList();
+        var replacedPaths = new HashSet<string>(replaced.Select(f => Path.GetFullPath(f.Path)), PathComparer);
+
         try
         {
-            var (folder, plan, torrentId) = await PrepareAsync(primary, ct).ConfigureAwait(false);
-            await DownloadAllAsync(primary, plan, torrentId, IsMine, ct).ConfigureAwait(false);
+            var (folder, plan, torrentId, episodes) = await PrepareAsync(primary, replaced.Count > 0, replacedPaths, ct).ConfigureAwait(false);
+            await DownloadAllAsync(primary, plan, torrentId, IsMine, replacedPaths, ct).ConfigureAwait(false);
+
+            var oldFolders = new List<string>();
+            if (replaced.Count > 0)
+            {
+                var (folders, problems) = DeleteReplacedFiles(replaced, plan, episodes);
+                oldFolders = folders;
+                if (problems.Count > 0)
+                {
+                    await _notifications.NotifyAdminsAsync(
+                        $"Remplacement de « {RequestService.Describe(primary)} » : nouveau fichier rangé, mais {string.Join(" ; ", problems)}", primary.Id, CancellationToken.None).ConfigureAwait(false);
+                }
+            }
 
             await _requests.UpdateActiveAsync(IsMine, r =>
             {
@@ -180,7 +196,7 @@ public class ImportService
                 plan.Items.Count,
                 plan.Skipped.Count == 0 ? "aucun" : string.Join(" ; ", plan.Skipped));
 
-            foreach (var dir in plan.Items.Select(i => Path.GetDirectoryName(i.Destination)!).Distinct(StringComparer.Ordinal))
+            foreach (var dir in plan.Items.Select(i => Path.GetDirectoryName(i.Destination)!).Concat(oldFolders).Distinct(StringComparer.Ordinal))
             {
                 _refresher.Refresh(dir);
             }
@@ -232,8 +248,13 @@ public class ImportService
     /// <summary>Attente avant le nouvel essai : 5 min après le premier échec, 30 min après le deuxième.</summary>
     internal static TimeSpan RetryDelay(int failedAttempts) => failedAttempts <= 1 ? TimeSpan.FromMinutes(5) : TimeSpan.FromMinutes(30);
 
-    /// <summary>Lit les fichiers sur Torbox, résout les dossiers et calcule le plan d'import.</summary>
-    private async Task<(string Folder, ImportPlan Plan, long TorrentId)> PrepareAsync(MediaRequest request, CancellationToken ct)
+    /// <summary>
+    /// Lit les fichiers sur Torbox, résout les dossiers et calcule le plan d'import. Renvoie aussi les épisodes
+    /// contenus dans le torrent (séries). <paramref name="replacing"/> : remplacement d'un média, rangé à la place
+    /// de ses anciens fichiers (<paramref name="replacedPaths"/>, qui peuvent être écrasés).
+    /// </summary>
+    private async Task<(string Folder, ImportPlan Plan, long TorrentId, IReadOnlyList<(int Season, int Episode)> Episodes)> PrepareAsync(
+        MediaRequest request, bool replacing, IReadOnlySet<string> replacedPaths, CancellationToken ct)
     {
         TorboxTorrent? torrent = null;
         if (request.TorboxTorrentId is { } id)
@@ -275,41 +296,155 @@ public class ImportService
         }
 
         var ids = RequestService.ProviderIdsOf(request);
+        IReadOnlyList<(int Season, int Episode)> episodes = Array.Empty<(int, int)>();
         ImportTarget target;
         if (request.MediaKind == MediaKind.Movie)
         {
+            // Remplacement : le nouveau fichier va dans le dossier actuel du film, comme une mise à niveau Radarr.
             target = new ImportTarget
             {
-                Folder = Path.Combine(root, LibraryNaming.MovieFolder(request.MediaTitle, request.Year, request.TmdbId)),
+                Folder = (replacing ? OwnFolderOf(replacedPaths, request.MediaKind) : null)
+                    ?? Path.Combine(root, LibraryNaming.MovieFolder(request.MediaTitle, request.Year, request.TmdbId)),
                 IncludeSubtitles = _config.Current.ImportSubtitles,
             };
         }
         else if (request.MediaKind == MediaKind.Book)
         {
-            target = new ImportTarget { Folder = Path.Combine(root, LibraryNaming.BookName(request.MediaTitle, request.Year)) };
+            target = new ImportTarget
+            {
+                Folder = (replacing ? OwnFolderOf(replacedPaths, request.MediaKind) : null)
+                    ?? Path.Combine(root, LibraryNaming.BookName(request.MediaTitle, request.Year)),
+            };
         }
         else
         {
             // Série déjà présente : on range dans son dossier actuel, comme Sonarr.
             var seriesFolder = _library.GetSeriesFolder(ids)
                 ?? Path.Combine(root, LibraryNaming.SeriesFolder(request.MediaTitle, request.Year, request.TmdbId));
-            var episodes = ImportPlanner.FindEpisodes(request, torrent.Files);
+            episodes = ImportPlanner.FindEpisodes(request, torrent.Files);
             var titles = await _titles.GetTitlesAsync(ids, episodes, ct).ConfigureAwait(false);
             target = new ImportTarget
             {
                 Folder = seriesFolder,
                 SeasonFolder = s => _library.GetSeasonFolder(ids, s) ?? Path.Combine(seriesFolder, LibraryNaming.SeasonFolder(s)),
                 EpisodeTitles = titles,
-                EpisodeExists = (s, e) => _library.CountEpisodes(ids, s, e) > 0,
+
+                // Remplacement d'une saison : tous ses épisodes sont retéléchargés, même ceux déjà présents.
+                EpisodeExists = replacing ? (_, _) => false : (s, e) => _library.CountEpisodes(ids, s, e) > 0,
                 IncludeSubtitles = _config.Current.ImportSubtitles,
             };
         }
 
         var plan = ImportPlanner.Plan(request, torrent.Files, target);
         EnsureInside(target.Folder, plan);
-        EnsureNoOverwrite(plan);
+        EnsureNoOverwrite(plan, replacedPaths);
         EnsureFreeSpace(target.Folder, root, plan);
-        return (target.Folder, plan, torrent.Id);
+        return (target.Folder, plan, torrent.Id, episodes);
+    }
+
+    /// <summary>
+    /// Dossier propre au média remplacé (celui de son ancien fichier), ou null s'il est rangé directement à la racine
+    /// d'une bibliothèque (le nouveau fichier prend alors un dossier à son nom).
+    /// </summary>
+    private string? OwnFolderOf(IReadOnlySet<string> replacedPaths, MediaKind kind)
+    {
+        var folder = replacedPaths.Select(Path.GetDirectoryName).FirstOrDefault(d => !string.IsNullOrEmpty(d));
+        if (folder is null || !Directory.Exists(folder) || IsLibraryRoot(folder, kind))
+        {
+            return null;
+        }
+
+        return folder;
+    }
+
+    private bool IsLibraryRoot(string folder, MediaKind kind)
+    {
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+        return _library.GetLibraryFolders(kind).Append(ResolveRoot(kind))
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Any(r => PathComparer.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(r!)), full));
+    }
+
+    /// <summary>Comparaison des chemins : insensible à la casse sous Windows seulement.</summary>
+    private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    /// <summary>Fichiers « compagnons » supprimés avec l'ancien fichier d'un média remplacé (sous-titres, .nfo, vignette).</summary>
+    private static readonly string[] SidecarExtensions = [".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".sup", ".nfo", ".jpg", ".png"];
+
+    /// <summary>
+    /// Supprime les anciens fichiers d'un média remplacé, une fois les nouveaux rangés : sauf ceux écrasés par un
+    /// nouveau fichier du même nom, et, pour une série, ceux dont les épisodes ne sont pas tous dans le nouveau torrent.
+    /// Renvoie les dossiers touchés (à signaler à Jellyfin) et les problèmes rencontrés (jamais d'exception : les
+    /// nouveaux fichiers sont déjà en place).
+    /// </summary>
+    private (List<string> Folders, List<string> Problems) DeleteReplacedFiles(
+        IReadOnlyList<ReplacedFile> replaced, ImportPlan plan, IReadOnlyCollection<(int Season, int Episode)> episodes)
+    {
+        var newFiles = new HashSet<string>(plan.Items.Select(i => Path.GetFullPath(i.Destination)), PathComparer);
+        var covered = episodes.ToHashSet();
+        var folders = new List<string>();
+        var problems = new List<string>();
+        foreach (var old in replaced)
+        {
+            var path = Path.GetFullPath(old.Path);
+            var dir = Path.GetDirectoryName(path);
+            if (newFiles.Contains(path) || dir is null)
+            {
+                continue;
+            }
+
+            if (old.Season is { } s && old.Episode is { } first)
+            {
+                var last = old.EpisodeEnd is { } end && end >= first ? Math.Min(end, first + 50) : first;
+                if (!Enumerable.Range(first, last - first + 1).All(e => covered.Contains((s, e))))
+                {
+                    problems.Add($"« {Path.GetFileName(path)} » conservé (épisode absent du nouveau torrent)");
+                    continue;
+                }
+            }
+
+            try
+            {
+                var stem = Path.GetFileNameWithoutExtension(path);
+                var sidecars = Directory.Exists(dir)
+                    ? Directory.EnumerateFiles(dir)
+                        .Where(f => !PathComparer.Equals(f, path) && !newFiles.Contains(Path.GetFullPath(f)))
+                        .Where(f =>
+                        {
+                            var name = Path.GetFileName(f);
+                            return (name.StartsWith(stem + ".", StringComparison.Ordinal) || name.StartsWith(stem + "-", StringComparison.Ordinal))
+                                && SidecarExtensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase);
+                        })
+                        .ToList()
+                    : new List<string>();
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+
+                foreach (var sidecar in sidecars)
+                {
+                    File.Delete(sidecar);
+                }
+
+                _logger.LogInformation("Remplacement : ancien fichier {Path} supprimé ({Count} fichier(s) associé(s))", path, sidecars.Count);
+                if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any() && !IsLibraryRoot(dir, MediaKind.Movie)
+                    && !IsLibraryRoot(dir, MediaKind.Series) && !IsLibraryRoot(dir, MediaKind.Book))
+                {
+                    Directory.Delete(dir);
+                    dir = Path.GetDirectoryName(dir) ?? dir;
+                }
+
+                folders.Add(dir);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Remplacement : suppression de l'ancien fichier {Path} impossible", path);
+                problems.Add($"l'ancien fichier « {path} » n'a pas pu être supprimé ({ex.Message})");
+            }
+        }
+
+        return (folders, problems);
     }
 
     /// <summary>Garde-fou : aucun fichier ne doit sortir du dossier du média (noms déjà nettoyés, mais on vérifie).</summary>
@@ -327,13 +462,14 @@ public class ImportService
 
     /// <summary>
     /// Un fichier différent existe déjà à la destination : on ne l'écrase jamais (un fichier identique,
-    /// de même taille, est considéré comme déjà rangé).
+    /// de même taille, est considéré comme déjà rangé), sauf s'il s'agit de l'ancien fichier d'un média remplacé.
     /// </summary>
-    private static void EnsureNoOverwrite(ImportPlan plan)
+    private static void EnsureNoOverwrite(ImportPlan plan, IReadOnlySet<string> replacedPaths)
     {
         foreach (var item in plan.Items)
         {
-            if (File.Exists(item.Destination) && new FileInfo(item.Destination).Length != item.File.Size)
+            if (File.Exists(item.Destination) && new FileInfo(item.Destination).Length != item.File.Size
+                && !replacedPaths.Contains(Path.GetFullPath(item.Destination)))
             {
                 throw new ImportException($"Un autre fichier existe déjà à « {item.Destination} » : il n'est pas écrasé. Déplacez-le puis relancez.");
             }
@@ -372,7 +508,7 @@ public class ImportService
         return File.Exists(part) ? Math.Min(new FileInfo(part).Length, item.File.Size) : 0;
     }
 
-    private async Task DownloadAllAsync(MediaRequest primary, ImportPlan plan, long torrentId, Func<MediaRequest, bool> isMine, CancellationToken ct)
+    private async Task DownloadAllAsync(MediaRequest primary, ImportPlan plan, long torrentId, Func<MediaRequest, bool> isMine, IReadOnlySet<string> replacedPaths, CancellationToken ct)
     {
         long total = Math.Max(1, plan.TotalBytes);
         var items = plan.Items;
@@ -403,7 +539,10 @@ public class ImportService
         await Parallel.ForEachAsync(Enumerable.Range(0, items.Count), options, async (index, token) =>
         {
             var item = items[index];
-            if (File.Exists(item.Destination) && item.File.Size > 0 && new FileInfo(item.Destination).Length == item.File.Size)
+
+            // L'ancien fichier d'un média remplacé, au même nom, n'est jamais pris pour le nouveau : il est écrasé une fois celui-ci complet.
+            var overwrite = replacedPaths.Contains(Path.GetFullPath(item.Destination));
+            if (!overwrite && File.Exists(item.Destination) && item.File.Size > 0 && new FileInfo(item.Destination).Length == item.File.Size)
             {
                 Interlocked.Exchange(ref bytes[index], item.File.Size);
                 return;
@@ -416,7 +555,7 @@ public class ImportService
                 try
                 {
                     var url = await _torbox.RequestDownloadUrlAsync(torrentId, item.File.Id, token).ConfigureAwait(false);
-                    await _downloader.DownloadAsync(url, item.Destination, item.File.Size, written => OnBytes(index, written), token).ConfigureAwait(false);
+                    await _downloader.DownloadAsync(url, item.Destination, item.File.Size, written => OnBytes(index, written), token, overwrite).ConfigureAwait(false);
                     break;
                 }
                 catch (Exception ex) when (attempt < AttemptsPerFile && !token.IsCancellationRequested

@@ -52,7 +52,8 @@ public class TorrentSearchService
         var response = new TorrentSearchResponse { Scope = request.Scope };
         var warnings = new List<string>();
 
-        switch (request.Scope)
+        // Remplacement d'un média de la bibliothèque : il y est forcément déjà.
+        switch (request.IgnoreLibrary ? (RequestScope?)null : request.Scope)
         {
             case RequestScope.Movie:
                 response.AlreadyInLibrary = _library.IsMovieInLibrary(request.ProviderIds);

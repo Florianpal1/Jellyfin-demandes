@@ -149,8 +149,9 @@ public sealed class ImportServiceTests : IDisposable
         return new HttpResponseMessage(HttpStatusCode.NotFound);
     }
 
-    private MediaRequest AddCompleted(MediaKind kind, RequestScope scope, string title, int? year, int? season = null, int? episode = null)
-        => _repository.Insert(new MediaRequest
+    private MediaRequest AddCompleted(MediaKind kind, RequestScope scope, string title, int? year, int? season = null, int? episode = null, Action<MediaRequest>? configure = null)
+    {
+        var request = new MediaRequest
         {
             UserId = Guid.NewGuid(),
             UserName = "alice",
@@ -165,7 +166,10 @@ public sealed class ImportServiceTests : IDisposable
             InfoHash = Hash,
             TorboxTorrentId = 99,
             Status = RequestStatus.CompletedOnTorbox,
-        });
+        };
+        configure?.Invoke(request);
+        return _repository.Insert(request);
+    }
 
     /// <summary>Enchaîne les tentatives de rangement automatiques (sans attendre leur délai) jusqu'à l'échec définitif.</summary>
     private async Task ImportUntilFinalFailureAsync(long id)
@@ -253,6 +257,109 @@ public sealed class ImportServiceTests : IDisposable
         Assert.False(await _import.ProcessNextAsync(CancellationToken.None));
         Assert.Equal(RequestStatus.CompletedOnTorbox, _repository.Get(r.Id)!.Status);
         Assert.Empty(_http.Calls);
+    }
+
+    /// <summary>Demande de remplacement d'un média de la bibliothèque (anciens fichiers créés sur le disque).</summary>
+    private MediaRequest AddReplacement(MediaKind kind, RequestScope scope, string title, int? year, IEnumerable<ReplacedFile> oldFiles, int? season = null)
+    {
+        var files = oldFiles.ToList();
+        foreach (var f in files)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(f.Path)!);
+            File.WriteAllBytes(f.Path, new byte[] { 9, 9, 9 });
+        }
+
+        return AddCompleted(kind, scope, title, year, season, configure: r =>
+        {
+            r.ReplaceItemId = Guid.NewGuid().ToString("N");
+            r.ReplacedFiles = System.Text.Json.JsonSerializer.Serialize(files);
+        });
+    }
+
+    [Fact]
+    public async Task Replacement_FilesTheNewMovieInItsCurrentFolder_ThenDeletesTheOldFile()
+    {
+        _library.MovieInLibrary = true;
+        _files = """
+            [ { "id": 1, "name": "Dune.2021.MULTi.1080p.BluRay.x264.mkv", "size": 5000 },
+              { "id": 2, "name": "Dune.FRENCH.srt", "size": 30 } ]
+            """;
+        var folder = Path.Combine(_dir, "Films", "Dune (2021)");
+        var old = Path.Combine(folder, "Dune.2021.720p.HDTV.mkv");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "Dune.2021.720p.HDTV.fr.srt"), "ancien sous-titre");
+        File.WriteAllText(Path.Combine(folder, "poster.jpg"), "affiche");
+        var r = AddReplacement(MediaKind.Movie, RequestScope.Movie, "Dune", 2021, [new ReplacedFile(old)]);
+
+        // Le film est déjà dans la bibliothèque : il est quand même téléchargé, puisqu'il s'agit d'un remplacement.
+        Assert.True(await _import.ProcessNextAsync(CancellationToken.None));
+
+        Assert.Equal(Content(1, 5000), File.ReadAllBytes(Path.Combine(folder, "Dune (2021) Bluray-1080p.mkv")));
+        Assert.True(File.Exists(Path.Combine(folder, "Dune (2021) Bluray-1080p.fr.srt")));
+        Assert.False(File.Exists(old));
+        Assert.False(File.Exists(Path.Combine(folder, "Dune.2021.720p.HDTV.fr.srt")));
+        Assert.True(File.Exists(Path.Combine(folder, "poster.jpg")));
+        Assert.False(Directory.Exists(Path.Combine(_dir, "Films", "Dune (2021) [tmdbid-438631]")));
+        Assert.Equal(RequestStatus.Imported, _repository.Get(r.Id)!.Status);
+        Assert.Contains(folder, _refresher.Paths);
+        Assert.DoesNotContain(_notifications.Sent, n => n.Message.Contains("Remplacement", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Replacement_OverwritesAnOldFileWithTheSameName_OnceTheNewOneIsComplete()
+    {
+        _files = """[ { "id": 1, "name": "Dune.2021.MULTi.1080p.BluRay.x264.mkv", "size": 5000 } ]""";
+        var folder = Path.Combine(_dir, "Films", "Dune (2021)");
+        var old = Path.Combine(folder, "Dune (2021) Bluray-1080p.mkv");
+        var r = AddReplacement(MediaKind.Movie, RequestScope.Movie, "Dune", 2021, [new ReplacedFile(old)]);
+
+        await _import.ProcessNextAsync(CancellationToken.None);
+
+        Assert.Equal(Content(1, 5000), File.ReadAllBytes(old));
+        Assert.Single(Directory.GetFiles(folder));
+        Assert.Equal(RequestStatus.Imported, _repository.Get(r.Id)!.Status);
+    }
+
+    [Fact]
+    public async Task Replacement_OfAMovieAtTheLibraryRoot_GetsItsOwnFolder_AndKeepsTheRoot()
+    {
+        _files = """[ { "id": 1, "name": "Dune.2021.MULTi.1080p.BluRay.x264.mkv", "size": 5000 } ]""";
+        var root = Path.Combine(_dir, "Films");
+        var old = Path.Combine(root, "Dune.2021.720p.mkv");
+        AddReplacement(MediaKind.Movie, RequestScope.Movie, "Dune", 2021, [new ReplacedFile(old)]);
+
+        await _import.ProcessNextAsync(CancellationToken.None);
+
+        Assert.True(File.Exists(Path.Combine(root, "Dune (2021) [tmdbid-438631]", "Dune (2021) Bluray-1080p.mkv")));
+        Assert.False(File.Exists(old));
+        Assert.True(Directory.Exists(root));
+    }
+
+    [Fact]
+    public async Task Replacement_OfASeason_RedownloadsPresentEpisodes_AndKeepsThoseMissingFromTheTorrent()
+    {
+        var series = Path.Combine(_dir, "Series", "The Bear");
+        var season = Path.Combine(series, "Season 01");
+        _library.SeriesFolder = series;
+        _library.PresentEpisodes.UnionWith([(1, 1), (1, 2), (1, 3)]);
+        _files = """
+            [ { "id": 1, "name": "The.Bear.S01/The.Bear.S01E01.1080p.WEB-DL.mkv", "size": 200 },
+              { "id": 2, "name": "The.Bear.S01/The.Bear.S01E02.1080p.WEB-DL.mkv", "size": 300 } ]
+            """;
+        var e1 = Path.Combine(season, "The.Bear.S01E01.720p.mkv");
+        var e2 = Path.Combine(season, "The.Bear.S01E02.720p.mkv");
+        var e3 = Path.Combine(season, "The.Bear.S01E03.720p.mkv");
+        var r = AddReplacement(MediaKind.Series, RequestScope.Season, "The Bear", 2022, [new ReplacedFile(e1, 1, 1), new ReplacedFile(e2, 1, 2), new ReplacedFile(e3, 1, 3)], season: 1);
+
+        await _import.ProcessNextAsync(CancellationToken.None);
+
+        Assert.True(File.Exists(Path.Combine(season, "The Bear - S01E01 WEBDL-1080p.mkv")));
+        Assert.True(File.Exists(Path.Combine(season, "The Bear - S01E02 WEBDL-1080p.mkv")));
+        Assert.False(File.Exists(e1));
+        Assert.False(File.Exists(e2));
+        Assert.True(File.Exists(e3));
+        Assert.Equal(RequestStatus.Imported, _repository.Get(r.Id)!.Status);
+        Assert.Contains(_notifications.Sent, n => n.UserId is null && n.Message.Contains("The.Bear.S01E03.720p.mkv", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -409,7 +516,7 @@ public sealed class ImportServiceTests : IDisposable
         {
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN MissingOnTorboxSince; ALTER TABLE Requests DROP COLUMN ImportAttempts; ALTER TABLE Requests DROP COLUMN RetryImportAfter; ALTER TABLE Requests DROP COLUMN StaleNotifiedAt; ALTER TABLE Requests DROP COLUMN ImportProgress; ALTER TABLE Requests DROP COLUMN ImportedPath; ALTER TABLE Requests DROP COLUMN BookIds; PRAGMA user_version = 1;";
+            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN ReplaceItemId; ALTER TABLE Requests DROP COLUMN ReplacedFiles; ALTER TABLE Requests DROP COLUMN MissingOnTorboxSince; ALTER TABLE Requests DROP COLUMN ImportAttempts; ALTER TABLE Requests DROP COLUMN RetryImportAfter; ALTER TABLE Requests DROP COLUMN StaleNotifiedAt; ALTER TABLE Requests DROP COLUMN ImportProgress; ALTER TABLE Requests DROP COLUMN ImportedPath; ALTER TABLE Requests DROP COLUMN BookIds; PRAGMA user_version = 1;";
             cmd.ExecuteNonQuery();
         }
 
@@ -433,7 +540,7 @@ public sealed class ImportServiceTests : IDisposable
         {
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN MissingOnTorboxSince; ALTER TABLE Requests DROP COLUMN ImportAttempts; ALTER TABLE Requests DROP COLUMN RetryImportAfter; ALTER TABLE Requests DROP COLUMN StaleNotifiedAt; ALTER TABLE Requests DROP COLUMN BookIds; PRAGMA user_version = 2;";
+            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN ReplaceItemId; ALTER TABLE Requests DROP COLUMN ReplacedFiles; ALTER TABLE Requests DROP COLUMN MissingOnTorboxSince; ALTER TABLE Requests DROP COLUMN ImportAttempts; ALTER TABLE Requests DROP COLUMN RetryImportAfter; ALTER TABLE Requests DROP COLUMN StaleNotifiedAt; ALTER TABLE Requests DROP COLUMN BookIds; PRAGMA user_version = 2;";
             cmd.ExecuteNonQuery();
         }
 
@@ -452,7 +559,7 @@ public sealed class ImportServiceTests : IDisposable
         {
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN MissingOnTorboxSince; ALTER TABLE Requests DROP COLUMN ImportAttempts; ALTER TABLE Requests DROP COLUMN RetryImportAfter; ALTER TABLE Requests DROP COLUMN StaleNotifiedAt; PRAGMA user_version = 3;";
+            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN ReplaceItemId; ALTER TABLE Requests DROP COLUMN ReplacedFiles; ALTER TABLE Requests DROP COLUMN MissingOnTorboxSince; ALTER TABLE Requests DROP COLUMN ImportAttempts; ALTER TABLE Requests DROP COLUMN RetryImportAfter; ALTER TABLE Requests DROP COLUMN StaleNotifiedAt; PRAGMA user_version = 3;";
             cmd.ExecuteNonQuery();
         }
 
@@ -471,4 +578,42 @@ public sealed class ImportServiceTests : IDisposable
         Assert.Equal(retryAt, saved.MissingOnTorboxSince);
         Assert.Equal(retryAt, saved.StaleNotifiedAt);
     }
+
+    [Fact]
+    public void Repository_MigratesV4Database()
+    {
+        var path = Path.Combine(_dir, "v4.db");
+        _ = new RequestRepository(path);
+        using (var conn = new SqliteConnection("Data Source=" + path + ";Pooling=False"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "ALTER TABLE Requests DROP COLUMN ReplaceItemId; ALTER TABLE Requests DROP COLUMN ReplacedFiles; PRAGMA user_version = 4;";
+            cmd.ExecuteNonQuery();
+        }
+
+        var repo = new RequestRepository(path);
+        var files = new[] { new ReplacedFile("/films/Dune/Dune.mkv") };
+        var r = repo.Insert(new MediaRequest
+        {
+            UserId = Guid.NewGuid(),
+            MediaTitle = "Dune",
+            Status = RequestStatus.Approved,
+            ReplaceItemId = "0123456789abcdef0123456789abcdef",
+            ReplacedFiles = System.Text.Json.JsonSerializer.Serialize(files),
+        });
+
+        var saved = repo.Get(r.Id)!;
+        Assert.Equal("0123456789abcdef0123456789abcdef", saved.ReplaceItemId);
+        Assert.Equal(files, RequestService.ReplacedFilesOf(saved));
+    }
+
+    [Theory]
+    [InlineData(3840, 1600, "2160p")]
+    [InlineData(1920, 800, "1080p")]
+    [InlineData(1280, 720, "720p")]
+    [InlineData(720, 576, "SD")]
+    [InlineData(0, 0, null)]
+    public void Resolution_FromVideoSize(int width, int height, string? expected)
+        => Assert.Equal(expected, MediaLibrary.Resolution(width, height));
 }
