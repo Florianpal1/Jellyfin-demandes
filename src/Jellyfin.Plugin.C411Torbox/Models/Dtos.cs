@@ -150,6 +150,62 @@ public class TorrentSearchResponse
     public string? Warning { get; set; }
 }
 
+/// <summary>Un torrent en cache Torbox, dans la page « En cache ».</summary>
+public class CatalogRelease
+{
+    public string Title { get; set; } = string.Empty;
+
+    public long SizeBytes { get; set; }
+
+    public int Seeders { get; set; }
+
+    public int? Season { get; set; }
+
+    public int? Episode { get; set; }
+
+    public DateTime? PublishDate { get; set; }
+}
+
+/// <summary>Un film ou une série dont au moins une des dernières sorties C411 est en cache Torbox.</summary>
+public class CatalogItem
+{
+    public MediaKind Kind { get; set; }
+
+    /// <summary>Fiche du média (null si elle n'a pas été trouvée : la page propose alors de chercher le titre).</summary>
+    public MediaSearchResult? Media { get; set; }
+
+    /// <summary>Titre (de la fiche, sinon lu dans le nom du torrent).</summary>
+    public string Name { get; set; } = string.Empty;
+
+    public int? Year { get; set; }
+
+    /// <summary>Séries : saisons présentes dans les torrents en cache, dans l'ordre.</summary>
+    public IReadOnlyList<int> Seasons { get; set; } = Array.Empty<int>();
+
+    /// <summary>Date du torrent le plus récent.</summary>
+    public DateTime? LatestPublishDate { get; set; }
+
+    /// <summary>Torrents en cache (les plus récents d'abord, au plus <c>CachedCatalogService.MaxReleasesPerItem</c>).</summary>
+    public IReadOnlyList<CatalogRelease> Releases { get; set; } = Array.Empty<CatalogRelease>();
+
+    /// <summary>Nombre total de torrents en cache pour ce média.</summary>
+    public int ReleaseCount { get; set; }
+}
+
+public class CatalogResponse
+{
+    public MediaKind Kind { get; set; }
+
+    public IReadOnlyList<CatalogItem> Items { get; set; } = Array.Empty<CatalogItem>();
+
+    /// <summary>Nombre de dernières sorties C411 examinées.</summary>
+    public int Scanned { get; set; }
+
+    public DateTime GeneratedAt { get; set; }
+
+    public string? Warning { get; set; }
+}
+
 public class CreateRequestBody
 {
     public string ResultId { get; set; } = string.Empty;

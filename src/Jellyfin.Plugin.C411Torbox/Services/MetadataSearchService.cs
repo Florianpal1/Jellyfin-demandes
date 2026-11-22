@@ -18,7 +18,7 @@ namespace Jellyfin.Plugin.C411Torbox.Services;
 /// de métadonnées déjà configurés sur le serveur Jellyfin (TMDB ; Google Books et Comic Vine via l'extension
 /// Bookshelf pour les livres) : aucune clé supplémentaire.
 /// </summary>
-public partial class MetadataSearchService : ITitleAliasProvider
+public partial class MetadataSearchService : ITitleAliasProvider, IMediaSearch
 {
     /// <summary>Nom du fournisseur TMDB intégré à Jellyfin.</summary>
     private const string TmdbProviderName = "TheMovieDb";

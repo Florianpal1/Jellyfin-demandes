@@ -24,6 +24,12 @@ public interface ITorrentIndexer
     /// </summary>
     Task<IReadOnlyList<TorrentResult>> SearchAsync(TorrentSearchRequest request, Func<TorrentResult, bool> accept, CancellationToken ct);
 
+    /// <summary>
+    /// Dernières sorties des catégories du type (recherche sans texte, comme le flux RSS de Radarr / Sonarr) :
+    /// <paramref name="limit"/> résultats à partir de <paramref name="offset"/>.
+    /// </summary>
+    Task<IReadOnlyList<TorrentResult>> LatestAsync(MediaKind kind, int offset, int limit, CancellationToken ct);
+
     /// <summary>Télécharge le .torrent (ou suit la redirection vers un lien magnet).</summary>
     Task<TorrentSource> DownloadAsync(string downloadUrl, CancellationToken ct);
 

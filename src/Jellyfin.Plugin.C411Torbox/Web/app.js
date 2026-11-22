@@ -155,11 +155,26 @@
         return total === 0 || count === 0 ? 'Aucun média.' : `${start + 1}–${start + count} sur ${total}`;
     }
 
+    /** Résumé d'un média de la page « En cache » : « 3 torrents · saisons 1, 2 ». */
+    function catalogSummary(i) {
+        const count = i.releaseCount === 1 ? '1 torrent' : `${i.releaseCount} torrents`;
+        if (!i.seasons || !i.seasons.length) return count;
+        return count + ' · ' + (i.seasons.length === 1 ? 'saison ' : 'saisons ') + i.seasons.join(', ');
+    }
+
+    /** Saison (et épisode) à chercher en ouvrant une série de la page « En cache » : celle du torrent le plus récent. */
+    function catalogTarget(i) {
+        if (i.kind !== 'Series') return null;
+        const latest = (i.releases || []).find((r) => r.season != null);
+        if (latest) return { season: latest.season, episode: latest.episode != null ? latest.episode : null };
+        return i.seasons && i.seasons.length ? { season: i.seasons[i.seasons.length - 1], episode: null } : null;
+    }
+
     // Tests (moteur JavaScript sans navigateur) : seules les fonctions pures sont exposées.
     if (typeof document === 'undefined') {
         globalThis.C411Ui = {
             STATUS_LABELS, formatSize, describe, seedClass, safeImage, canUserCancel, canAdminCancel, canChangeTorrent, canMarkAvailable,
-            episodeLabel, retryText, staleDays, libraryLabel, itemImage, isKnownItem, canReplace, rangeText
+            episodeLabel, retryText, staleDays, libraryLabel, itemImage, isKnownItem, canReplace, rangeText, catalogSummary, catalogTarget
         };
         return;
     }
@@ -295,6 +310,72 @@
         if (tab === 'notifications') loadNotifications(true);
         if (tab === 'admin') loadAdmin();
         if (tab === 'library') loadLibrary();
+        if (tab === 'cache' && (!catalog.last || catalog.last.kind !== $('#cacheKind').value)) loadCatalog(false);
+    }
+
+    // ---------- page « En cache » ----------
+
+    const catalog = { ticket: 0, last: null };
+
+    async function loadCatalog(refresh) {
+        const kind = $('#cacheKind').value;
+        const box = $('#cacheResults');
+        $('#cacheHideLibraryLabel').hidden = kind !== 'Movie';
+        $('#cacheInfo').textContent = '';
+        const ticket = ++catalog.ticket;
+        catalog.last = null;
+        box.replaceChildren(el('div', { class: 'spinner' }, 'Recherche des dernières sorties en cache… (jusqu\'à une minute)'));
+        try {
+            const res = await api('GET', `C411Torbox/Catalog?kind=${kind}${refresh ? '&refresh=true' : ''}`);
+            if (ticket !== catalog.ticket) return;
+            catalog.last = res;
+            renderCatalog();
+        } catch (e) {
+            if (ticket === catalog.ticket) box.replaceChildren(el('p', { class: 'error' }, e.message));
+        }
+    }
+
+    function renderCatalog() {
+        const res = catalog.last;
+        if (!res) return;
+        const hide = res.kind === 'Movie' && $('#cacheHideLibrary').checked;
+        const items = res.items.filter((i) => !(hide && i.media && i.media.inLibrary));
+        const hidden = res.items.length - items.length;
+        $('#cacheInfo').textContent = `${items.length} ${res.kind === 'Movie' ? 'film(s)' : 'série(s)'} parmi les ${res.scanned} dernières sorties C411`
+            + (hidden ? ` (${hidden} déjà dans la bibliothèque, masqué(s))` : '')
+            + ` · mis à jour le ${formatDate(res.generatedAt)}` + (res.warning ? ' · ' + res.warning : '');
+        const box = $('#cacheResults');
+        box.replaceChildren();
+        if (!items.length) {
+            box.append(el('p', { class: 'muted' }, 'Aucune sortie récente en cache sur Torbox.'));
+            return;
+        }
+        for (const i of items) {
+            const img = safeImage(i.media && i.media.imageUrl);
+            box.append(el('button', {
+                class: 'card', type: 'button', onclick: () => openCatalogItem(i),
+                title: i.releases.map((r) => `${r.title} (${formatSize(r.sizeBytes)})`).join('\n')
+            },
+                i.media && i.media.inLibrary ? el('span', { class: 'tag' }, 'Dans la bibliothèque') : null,
+                el('div', { class: 'poster' }, img ? el('img', { src: img, alt: '', loading: 'lazy' }) : (i.media ? 'Pas d\'affiche' : 'Fiche introuvable')),
+                el('div', { class: 'info' },
+                    el('div', { class: 'title' }, i.name),
+                    el('div', { class: 'muted' }, i.year || ''),
+                    el('div', { class: 'cached-count' }, '⚡ ' + catalogSummary(i)))));
+        }
+    }
+
+    /** Ouvre la fiche dans l'onglet de recherche ; sans fiche, lance la recherche du titre lu dans le torrent. */
+    function openCatalogItem(i) {
+        showTab('search');
+        if (i.media) {
+            openMedia(i.media, catalogTarget(i));
+            return;
+        }
+        $('#mediaKind').value = i.kind;
+        $('#mediaQuery').value = i.name;
+        $('#mediaYear').value = i.year || '';
+        searchMedia({ preventDefault() {} });
     }
 
     // ---------- recherche de médias ----------
@@ -354,7 +435,8 @@
                 $('#episodeHint').textContent = 'Épisodes inconnus : saisissez le numéro.';
                 return;
             }
-            const first = list.find((e) => !e.inLibrary);
+            // Épisode visé (page « En cache ») s'il manque, sinon le premier épisode absent de la bibliothèque.
+            const first = list.find((e) => !e.inLibrary && e.episode === state.wantedEpisode) || list.find((e) => !e.inLibrary);
             for (const e of list) {
                 select.append(el('option', { value: e.episode, disabled: e.inLibrary, selected: first === e }, episodeLabel(e)));
             }
@@ -375,8 +457,16 @@
         return parseInt($('#episodeInput').value, 10);
     }
 
-    function openMedia(m) {
+    /** target (séries, page « En cache ») : { season, episode } à chercher tout de suite. */
+    function openMedia(m, target) {
         state.media = m;
+        state.wantedEpisode = target && target.episode != null ? target.episode : null;
+        if (target) {
+            $('#seasonInput').value = target.season;
+            $('#episodeToggle').checked = target.episode != null;
+            $('#episodeLabel').hidden = target.episode == null;
+            if (target.episode != null) $('#episodeInput').value = target.episode;
+        }
         const img = safeImage(m.imageUrl);
         $('#detailPoster').hidden = !img;
         if (img) $('#detailPoster').src = img;
@@ -392,7 +482,7 @@
         $('#torrentTable').hidden = true;
         $('#mediaDetail').hidden = false;
         $('#mediaDetail').scrollIntoView({ behavior: 'smooth', block: 'start' });
-        if (m.kind !== 'Series') searchTorrents();
+        if (m.kind !== 'Series' || target) searchTorrents();
     }
 
     async function searchTorrents(ev) {
@@ -892,6 +982,9 @@
         $('#libraryPrev').addEventListener('click', () => loadLibrary(Math.max(0, library.start - LIBRARY_PAGE)));
         $('#libraryNext').addEventListener('click', () => loadLibrary(library.start + LIBRARY_PAGE));
         $('#mineRefresh').addEventListener('click', () => loadMine(true));
+        $('#cacheKind').addEventListener('change', () => loadCatalog(false));
+        $('#cacheRefresh').addEventListener('click', () => loadCatalog(true));
+        $('#cacheHideLibrary').addEventListener('change', renderCatalog);
         document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
         start();
         setInterval(() => { if (state.me) { loadNotifications(false); updatePendingBadge(null); } }, 60000);

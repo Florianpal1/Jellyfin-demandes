@@ -16,7 +16,7 @@ namespace Jellyfin.Plugin.C411Torbox.Services;
 public sealed record TorrentSource(byte[]? File, string? Magnet);
 
 /// <summary>Paramètres d'une recherche Prowlarr.</summary>
-public sealed record ProwlarrQuery(string Query, string Type, IReadOnlyList<int> Categories);
+public sealed record ProwlarrQuery(string Query, string Type, IReadOnlyList<int> Categories, int Offset = 0, int Limit = 100);
 
 /// <summary>Client de l'API v1 de Prowlarr (C411 est un indexeur de Prowlarr).</summary>
 public class ProwlarrClient : ITorrentIndexer
@@ -61,7 +61,12 @@ public class ProwlarrClient : ITorrentIndexer
             throw new InvalidOperationException("L'indexeur C411 n'est pas configuré dans le plugin.");
         }
 
-        var sb = new StringBuilder("api/v1/search?limit=100");
+        var sb = new StringBuilder("api/v1/search?limit=").Append(query.Limit.ToString(CultureInfo.InvariantCulture));
+        if (query.Offset > 0)
+        {
+            sb.Append("&offset=").Append(query.Offset.ToString(CultureInfo.InvariantCulture));
+        }
+
         sb.Append("&query=").Append(Uri.EscapeDataString(query.Query));
         sb.Append("&type=").Append(Uri.EscapeDataString(query.Type));
         sb.Append("&indexerIds=").Append(cfg.ProwlarrIndexerId.ToString(CultureInfo.InvariantCulture));
@@ -118,6 +123,12 @@ public class ProwlarrClient : ITorrentIndexer
     }
 
     public string DisplayName => SourceName;
+
+    /// <summary>Dernières sorties : recherche Prowlarr sans texte, limitée aux catégories du type.</summary>
+    public Task<IReadOnlyList<TorrentResult>> LatestAsync(MediaKind kind, int offset, int limit, CancellationToken ct)
+        => SearchAsync(
+            new ProwlarrQuery(string.Empty, "search", JsonElementExtensions.ParseIntList(TorznabClient.CategoriesOf(kind, _config.Current)).ToList(), offset, limit),
+            ct);
 
     /// <summary>Prowlarr renvoie 0 quand l'identifiant est inconnu.</summary>
     private static string? IdOrNull(JsonElement item, string name)

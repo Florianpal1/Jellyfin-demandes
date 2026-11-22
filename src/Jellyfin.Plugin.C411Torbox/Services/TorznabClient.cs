@@ -59,6 +59,38 @@ public class TorznabClient : ITorrentIndexer
         => TorrentFileDownloader.DownloadAsync(
             _httpClientFactory.CreateClient(TorrentFileDownloader.HttpClientName), downloadUrl, SourceName, _certificates, null, ct);
 
+    public Task<IReadOnlyList<TorrentResult>> LatestAsync(MediaKind kind, int offset, int limit, CancellationToken ct)
+        => QueryAsync(BuildLatestQuery(kind, offset, limit, _config.Current), ct);
+
+    /// <summary>Dernières sorties : « t=search » sans « q », limité aux catégories du type.</summary>
+    public static TorznabQuery BuildLatestQuery(MediaKind kind, int offset, int limit, Configuration.PluginConfiguration cfg)
+    {
+        var p = new List<KeyValuePair<string, string>>
+        {
+            new("t", "search"),
+            new("limit", limit.ToString(CultureInfo.InvariantCulture)),
+        };
+        if (offset > 0)
+        {
+            p.Add(new("offset", offset.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        var cats = string.Join(",", JsonElementExtensions.ParseIntList(CategoriesOf(kind, cfg)));
+        if (cats.Length > 0)
+        {
+            p.Add(new("cat", cats));
+        }
+
+        return new TorznabQuery(p);
+    }
+
+    internal static string CategoriesOf(MediaKind kind, Configuration.PluginConfiguration cfg) => kind switch
+    {
+        MediaKind.Movie => cfg.MovieCategories,
+        MediaKind.Book => cfg.BookCategories,
+        _ => cfg.TvCategories,
+    };
+
     public async Task<string> TestAsync(CancellationToken ct)
     {
         // Une vraie recherche (limit=1) : vérifie à la fois l'adresse, le certificat et la clé API.
@@ -76,12 +108,7 @@ public class TorznabClient : ITorrentIndexer
         var ids = LibraryLookup.FilterIds(request.ProviderIds);
         var queries = new List<TorznabQuery>();
         var isMovie = request.Kind == MediaKind.Movie;
-        var cats = string.Join(",", JsonElementExtensions.ParseIntList(request.Kind switch
-        {
-            MediaKind.Movie => cfg.MovieCategories,
-            MediaKind.Book => cfg.BookCategories,
-            _ => cfg.TvCategories,
-        }));
+        var cats = string.Join(",", JsonElementExtensions.ParseIntList(CategoriesOf(request.Kind, cfg)));
 
         List<KeyValuePair<string, string>> Base(string type)
         {
